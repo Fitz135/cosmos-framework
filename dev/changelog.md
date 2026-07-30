@@ -28,6 +28,16 @@ Use this template:
 - **Validation**: ...
 ```
 
+## DEV-0003 — 2026-07-30 14:31 +08:00 — Centralize development documentation
+
+- **Area**: Repository documentation organization.
+- **Summary**: Required development plans, design notes, implementation records,
+  experiment notes, review notes, and changelogs to live under `dev/`.
+- **Documentation**: Updated the repository workflow rules in `AGENTS.md` and
+  recorded the policy in this changelog.
+- **Validation**: Checked the Markdown structure, sequential change IDs, the
+  absolute `dev/` path, and the scoped Git diff.
+
 ## DEV-0002 — 2026-07-30 14:22 +08:00 — Align changelog with Git commits
 
 - **Area**: Repository governance and development history.
