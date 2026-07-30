@@ -28,8 +28,11 @@ from cosmos_framework.inference.common.args import CheckpointOverrides, Resolved
 from cosmos_framework.inference.common.checkpoints import register_checkpoints
 from cosmos_framework.inference.common.public_model_config import build_public_model_config
 from cosmos_framework.inference.model import Cosmos3OmniConfig, Cosmos3OmniModel
+from cosmos_framework.scripts.model_conversion_utils import (
+    redirect_edge_processor_to_local,
+    redirect_video_vae_to_local,
+)
 from cosmos_framework.utils.checkpoint_db import _CHECKPOINTS
-
 
 _AVAE_REGISTRY_URI = "s3://bucket/pretrained/tokenizers/audio/avae"
 
@@ -53,6 +56,8 @@ def _redirect_avae_to_local(hf_path):
 class Args(pydantic.BaseModel):
     checkpoint: CheckpointOverrides
     """Hugging Face checkpoint."""
+    vae_path: ResolvedPath | None = None
+    """Optional local video VAE file used while constructing the model."""
     output_path: Annotated[ResolvedPath, tyro.conf.arg(aliases=("-o",))]
     """Output DCP checkpoint directory."""
 
@@ -63,6 +68,12 @@ def convert_model_to_dcp(args: Args):
     hf_path = checkpoint_config.download_checkpoint()
     _redirect_avae_to_local(hf_path)
     model_dict = checkpoint_config.load_model_config_dict()
+    redirect_edge_processor_to_local(model_dict, hf_path)
+    if args.vae_path is not None:
+        if not args.vae_path.is_file():
+            raise FileNotFoundError(f"Video VAE not found: {args.vae_path}")
+        if not redirect_video_vae_to_local(model_dict, args.vae_path):
+            raise ValueError("Model config has no video tokenizer vae_path to override")
     hf_config = Cosmos3OmniConfig(model=build_public_model_config(model_dict))
     hf_model = Cosmos3OmniModel.from_pretrained_dcp(hf_path, config=hf_config)
     state_dict = get_model_state_dict(hf_model.model)

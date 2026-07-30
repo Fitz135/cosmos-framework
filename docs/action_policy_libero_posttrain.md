@@ -1,34 +1,42 @@
-# Cosmos3-Nano LIBERO-10 action-policy SFT
+# Cosmos3 LIBERO action-policy SFT
 
-Full SFT of the public `nvidia/Cosmos3-Nano` base into a LIBERO-10 action
-policy: vision + language in, action chunks out.
+Full SFT of a Cosmos3 base into a LIBERO action policy: vision + language in,
+action chunks out.
 
-To match the LIBERO-10 SR reported in Cosmos3, we provide **two presets** (both
-lr 5e-5, warmup 500, cycle 16000, gbs 2048):
+Three presets are provided (all use lr 5e-5, warmup 500, cycle 16000, and
+global batch 2048):
 
-- **(A) libero_10-only** — trains on `libero_10` alone; peaks by ~iter 1500
+- **(A) Nano libero_10-only** — trains on `libero_10` alone; peaks by ~iter 1500
   (max_iter 2000). Fast.
   `action_policy_libero_nano` + `action_policy_libero_10_nano.toml` +
   `launch_sft_action_policy_libero_10_nano.sh`.
-- **(B) libero-all** — equal mix of all 4 LIBERO suites; needs longer training
+- **(B) Nano libero-all** — equal mix of all 4 LIBERO suites; needs longer training
   (max_iter 5000).
   `action_policy_libero_all_nano` + `action_policy_libero_all_nano.toml` +
   `launch_sft_action_policy_libero_all_nano.sh`.
+- **(C) Edge merged libero-all at 10 FPS** — trains all 40 tasks from one
+  merged LeRobot v3 root, retains the pretrained Cosmos3-Edge action heads, and
+  uses an 8-action chunk (max_iter 5000).
+  `action_policy_libero_all_edge_10fps` +
+  `action_policy_libero_all_edge_10fps.toml` +
+  `launch_sft_action_policy_libero_all_edge_10fps.sh`.
 
 | Piece            | Path                                                                                                 |
 | ---------------- | ---------------------------------------------------------------------------------------------------- |
 | Dataset          | `cosmos_framework/data/generator/action/datasets/libero_lerobot_dataset.py` (`LIBEROLeRobotDataset`) |
 | SFT wrapper      | `get_action_libero_sft_dataset` in `.../datasets/action_sft_dataset.py`                              |
-| Norm stats       | `.../normalizer_stats/libero_native_frame_wise_relative_rot6d.json`                                  |
-| Experiment       | `cosmos_framework/configs/base/experiment/action/posttrain_config/action_policy_libero_nano.py`      |
-| Run TOML         | `examples/toml/sft_config/action_policy_libero_10_nano.toml`                                         |
-| Launch           | `examples/launch_sft_action_policy_libero_10_nano.sh`                                                |
+| Nano norm stats  | `.../normalizer_stats/libero_native_frame_wise_relative_rot6d.json`                                  |
+| Edge norm stats  | `.../normalizer_stats/libero_10fps_pm_one_native_frame_wise_relative_rot6d.json`                     |
+| Edge experiment  | `.../posttrain_config/action_policy_libero_all_edge_10fps.py`                                        |
+| Edge run TOML    | `examples/toml/sft_config/action_policy_libero_all_edge_10fps.toml`                                  |
+| Edge launch      | `examples/launch_sft_action_policy_libero_all_edge_10fps.sh`                                         |
 | Inference server | `cosmos_framework/scripts/action_policy_server_libero.py`                                            |
 | Closed-loop eval | `cosmos_framework/simulation/libero/closed_loop_eval.py`                                             |
 
 ## 1. Data
 
-`LIBEROLeRobotDataset` reads a local LeRobot dir. Use the 20 FPS
+`LIBEROLeRobotDataset` reads a local LeRobot directory. The two Nano presets use
+the 20 FPS
 [`nvidia/LIBERO_LeRobot_v3`](https://huggingface.co/datasets/nvidia/LIBERO_LeRobot_v3),
 which the bundled `quantile_rot` stats and the 20 Hz eval assume.
 
@@ -47,6 +55,19 @@ hf download nvidia/LIBERO_LeRobot_v3 --repo-type dataset --local-dir <nfs>/LIBER
 export LIBERO_ROOT=<nfs>/LIBERO_LeRobot_v3          # parent of libero_spatial/object/goal/10
 ```
 
+**Preset C (Edge merged 10 FPS)** — `LIBERO_ROOT` points at one LeRobot v3 root:
+
+```bash
+export LIBERO_ROOT=/path/to/merged-libero
+test -f "$LIBERO_ROOT/meta/info.json"
+```
+
+Its metadata must declare 10 FPS and include
+`observation.images.image` (third-person) plus
+`observation.images.image2` (wrist). It uses all episodes (`split=full`), 9
+observation frames and 8 actions per sample. The committed 10D rot6d statistics
+match this dataset's `[-1, 1]` gripper convention.
+
 Actions are `frame_wise_relative` rot6d (10D = pos 3 + rot6d 6 + gripper 1),
 `concat_view` (third-person + wrist, each 256×256 → 256×512), `quantile_rot`
 normalized. The pipeline snaps the 256×512 concat to a 192×320 model canvas; the
@@ -54,14 +75,26 @@ eval server reproduces the same snap (§4).
 
 ## 2. Train
 
-Convert the base checkpoint to DCP once (registered catalog name; downloads
-`nvidia/Cosmos3-Nano` from the HF Hub — see [docs/training.md](./training.md) Step 2):
+Convert the selected base checkpoint to DCP once (registered catalog name;
+downloads from the HF Hub — see [docs/training.md](./training.md) Step 2):
 
 ```bash
+# Nano presets:
 python -m cosmos_framework.scripts.convert_model_to_dcp \
   -o examples/checkpoints/Cosmos3-Nano \
   --checkpoint-path Cosmos3-Nano
+
+# Edge preset:
+python -m cosmos_framework.scripts.convert_model_to_dcp \
+  -o examples/checkpoints/Cosmos3-Edge \
+  --checkpoint-path Cosmos3-Edge
 ```
+
+When converting from a local Edge Hugging Face snapshot in an offline
+environment, also pass
+`--config-file cosmos_framework/inference/configs/model/Cosmos3-Edge.yaml`
+and `--vae-path /path/to/Wan2.2_VAE.pth`. The converter will use the
+snapshot-bundled Edge processor files instead of contacting the Hub.
 
 Common env, then pick a preset launcher:
 
@@ -78,17 +111,30 @@ bash examples/launch_sft_action_policy_libero_10_nano.sh        # HSDP 2x8; set 
 # Preset B — libero-all 4-suite (LIBERO_ROOT = the LIBERO_LeRobot_v3 parent dir):
 export LIBERO_ROOT=<nfs>/LIBERO_LeRobot_v3
 bash examples/launch_sft_action_policy_libero_all_nano.sh    # HSDP 2x8; needs ~4500 iters to converge
+
+# Preset C — Edge merged 10 FPS:
+export BASE_CHECKPOINT_PATH=examples/checkpoints/Cosmos3-Edge
+export LIBERO_ROOT=/path/to/merged-libero
+# Optional for offline startup from an already-downloaded Edge HF snapshot:
+export COSMOS3_EDGE_PROCESSOR_PATH=/path/to/Cosmos3-Edge-hf
+bash examples/launch_sft_action_policy_libero_all_edge_10fps.sh  # FSDP8, one node
 ```
 
-Both recipes set lr 5e-5, warmup 500, cycle 16000, `save_iter=500`, HSDP 2x8 (global
+The Nano recipes set lr 5e-5, warmup 500, cycle 16000, `save_iter=500`, HSDP 2x8 (global
 batch 2048 = `max_samples_per_batch` 128 × 16 ranks × grad_accum 1). They differ only in
 `max_iter`: **2000** for libero_10-only (peaks ~iter 1500), **5000** for libero-all
 (the 4-suite mix takes longer to converge on libero_10, ~iter 4500).
 
+The Edge recipe uses one-node FSDP8 and global batch 2048 =
+`max_samples_per_batch` 128 × 8 ranks × grad accum 2. If 128 samples per rank
+OOMs, preserve global batch with `64/4`, then `32/8`, using the launcher's
+`EXTRA_TAIL_OVERRIDES`. W&B runs in offline mode.
+
 ## 3. Closed-loop eval
 
-Start the policy server on a **trained** checkpoint (the base DCP has no action
-heads), then run the LIBERO simulator client against it. Same for both presets —
+The current server/eval example targets the Nano presets. Start the policy
+server on a **trained** Nano checkpoint (the Nano base DCP has no action heads),
+then run the LIBERO simulator client against it. For either Nano preset,
 `action_policy_libero_nano` supplies the model config for either run's
 checkpoint; just point `--checkpoint-path` at the one you trained.
 

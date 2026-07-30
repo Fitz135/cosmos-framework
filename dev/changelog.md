@@ -28,6 +28,20 @@ Use this template:
 - **Validation**: ...
 ```
 
+## DEV-0005 — 2026-07-30 18:53 +08:00 — Add Cosmos3-Edge LIBERO recipe
+
+- **Area**: Cosmos3-Edge action-policy post-training and offline checkpoint
+  preparation.
+- **Summary**: Added the merged 10 FPS LIBERO Edge experiment, FSDP8 TOML,
+  launcher, registration, configuration tests, and offline-capable local
+  Edge/VAE HF-to-DCP conversion and training processor selection.
+- **Documentation**: Updated the generic LIBERO and training guides plus the
+  examples index, and synchronized the full PJLAB design, paths, rjob history,
+  failures, and validation evidence in `dev/cosmos3_edge_libero_finetune.md`.
+- **Validation**: Ruff, format, shell syntax, diff, focused tests, all shipped
+  example TOML schema tests, a real-dataset launcher mock, and H200 config
+  dry-run passed; the DCP was built entirely from GPFS-local artifacts.
+
 ## DEV-0004 — 2026-07-30 16:27 +08:00 — Support merged 10 FPS LIBERO data
 
 - **Area**: LIBERO action-policy dataset loading and action normalization.

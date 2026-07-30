@@ -168,14 +168,18 @@ python -m cosmos_framework.scripts.reasoner.prepare_videophy2_from_hf \
 
 <details><summary><b>Action-Policy Post-Training (DROID / LIBERO)</b></summary>
 
-Robot action-policy recipes: DROID (`joint_pos` 8-D actions + proprioceptive state) and
-LIBERO (`frame_wise_relative` rot6d 10-D actions), both from Cosmos3-Nano. They follow the same Step 2/Step 3 flow below, with their own data staging
-(DROID keep-ranges window filter, LIBERO suite selection), and are documented separately:
+Robot action-policy recipes: DROID (`joint_pos` 8-D actions + proprioceptive
+state) from Cosmos3-Nano, plus LIBERO (`frame_wise_relative` rot6d 10-D
+actions) from Cosmos3-Nano or Cosmos3-Edge. They follow the same Step 2/Step 3
+flow below, with their own data staging (DROID keep-ranges window filter,
+LIBERO suite selection), and are documented separately:
 
 - [DROID action policy](./action_policy_droid_posttrain.md) —
   `examples/launch_sft_action_policy_droid_nano.sh`
 - [LIBERO action policy](./action_policy_libero_posttrain.md) —
-  `examples/launch_sft_action_policy_libero_10_nano.sh` / `examples/launch_sft_action_policy_libero_all_nano.sh`
+  `examples/launch_sft_action_policy_libero_10_nano.sh`,
+  `examples/launch_sft_action_policy_libero_all_nano.sh`, or
+  `examples/launch_sft_action_policy_libero_all_edge_10fps.sh`
 
 </details>
 
@@ -195,6 +199,23 @@ python -m cosmos_framework.scripts.convert_model_to_dcp \
 ```
 
 `$BASE_CHECKPOINT_NAME` (e.g. `Cosmos3-Nano`, `Cosmos3-Super`, `Cosmos3-Edge`) is a registered name in the checkpoint catalog; the converter downloads the matching repo from the Hugging Face Hub and writes the DCP into `examples/checkpoints/$BASE_CHECKPOINT_NAME`.
+
+For an already-downloaded local Cosmos3-Edge Hugging Face snapshot, provide
+the matching model config and a local Wan2.2 VAE. This keeps conversion
+offline-capable:
+
+```shell
+python -m cosmos_framework.scripts.convert_model_to_dcp \
+  --checkpoint-path /path/to/Cosmos3-Edge-hf \
+  --config-file cosmos_framework/inference/configs/model/Cosmos3-Edge.yaml \
+  --vae-path /path/to/Wan2.2_VAE.pth \
+  -o /path/to/Cosmos3-Edge-dcp
+```
+
+For Edge training in the same offline environment, also export
+`COSMOS3_EDGE_PROCESSOR_PATH=/path/to/Cosmos3-Edge-hf`; Edge recipes that
+support this variable will instantiate the bundled processor from that local
+snapshot.
 
 **Reasoner Alignment SFT with LLaVA-OneVision (vfm-vlm):** Skip this step — the Reasoner alignment SFT loads `Qwen/Qwen3-VL-8B-Instruct` from the HF Hub at startup (no DCP conversion required). To start from a merged Cosmos3 reasoner snapshot instead, build one with `convert_model_to_vlm_safetensors` (see the VideoPhy-2 note below) and pass it via `VLM_SAFETENSORS_PATH`.
 
