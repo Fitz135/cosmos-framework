@@ -33,6 +33,30 @@ A `justfile` is provided at the root with longer recipes (`just install`, `just 
 - Keep this file short. Link out to skills and docs for detail — this file is included in every prompt.
 - Inference code belongs under `cosmos_framework/inference/`; training infrastructure belongs under the other `cosmos_framework/` subpackages. Don't blur the two — if you find yourself adding training-time imports inside `cosmos_framework/inference/` (or vice versa), reconsider.
 
+## Development and Version-Control Workflow
+
+- Use Git for all source-code, configuration, and documentation changes. Inspect
+  the worktree before and after editing, and never include unrelated or generated
+  files in a commit.
+- GitHub credentials are kept only on the local MacBook. Never copy a token to
+  the cluster, write it into a remote URL, store it in the repository or remote
+  credential helpers, or expose it in commands, logs, documentation, or commits.
+  When authentication is required, pass the credential ephemerally from the
+  authorized local workflow.
+- After each complete code or feature update, run the relevant validation, create
+  a focused Git commit, and push it to the configured remote. Do not leave
+  completed implementation work uncommitted unless the user explicitly requests
+  that it remain unpublished.
+- Every code or feature update must also update the corresponding user,
+  developer, setup, or architecture documentation in the same commit. Keep
+  examples and commands synchronized with the implementation.
+- Record every completed development change in
+  [`dev/changelog.md`](./dev/changelog.md). Add the newest entry first and include
+  the date, affected area, concise summary, documentation updated, and validation
+  performed. The changelog entry belongs in the same commit as the change.
+- Documentation-only and development-rule changes must also be committed and
+  recorded in the changelog.
+
 ## Key File Locations
 
 ### Training (`cosmos_framework/`)
