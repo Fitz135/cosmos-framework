@@ -50,12 +50,21 @@ A `justfile` is provided at the root with longer recipes (`just install`, `just 
 - Every code or feature update must also update the corresponding user,
   developer, setup, or architecture documentation in the same commit. Keep
   examples and commands synchronized with the implementation.
-- Record every completed development change in
-  [`dev/changelog.md`](./dev/changelog.md). Add the newest entry first and include
-  the date, affected area, concise summary, documentation updated, and validation
-  performed. The changelog entry belongs in the same commit as the change.
-- Documentation-only and development-rule changes must also be committed and
-  recorded in the changelog.
+- Assign every completed change a monotonically increasing identifier in the
+  form `DEV-NNNN`. Determine the next identifier from the highest existing entry
+  in [`dev/changelog.md`](./dev/changelog.md); never reuse or renumber an ID.
+- Start every commit subject with its identifier, for example
+  `DEV-0002: add training configuration`, and create exactly one matching
+  changelog entry in the same commit. This shared identifier is the authoritative
+  mapping between the changelog and Git history.
+- Format changelog headings as
+  `## DEV-NNNN — YYYY-MM-DD HH:MM +08:00 — Short title`. Keep entries in reverse
+  commit order and record separate entries for multiple commits on the same day.
+- Include the affected area, concise summary, documentation updated, and
+  validation performed. Do not put a commit's own hash in its entry because
+  changing the entry would change that hash.
+- Documentation-only and development-rule changes follow the same commit and
+  changelog sequence.
 
 ## Key File Locations
 
