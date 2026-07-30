@@ -28,6 +28,18 @@ Use this template:
 - **Validation**: ...
 ```
 
+## DEV-0004 — 2026-07-30 16:27 +08:00 — Support merged 10 FPS LIBERO data
+
+- **Area**: LIBERO action-policy dataset loading and action normalization.
+- **Summary**: Added an explicit wrist-camera feature key, deterministic 7D
+  axis-angle to 10D rot6d statistics generation, the dataset-specific
+  normalizer, and focused tests for the 8-action/9-frame window.
+- **Documentation**: Created `dev/cosmos3_edge_libero_finetune.md` with the
+  design, dataset schema, source fingerprint, cluster paths, and validation.
+- **Validation**: Six focused tests passed; Ruff, format, and diff checks
+  passed; a real PyAV-decoded sample had shape `[3,9,256,512]` with finite
+  `[8,10]` actions.
+
 ## DEV-0003 — 2026-07-30 14:31 +08:00 — Centralize development documentation
 
 - **Area**: Repository documentation organization.

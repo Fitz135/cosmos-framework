@@ -54,6 +54,34 @@ _VIEWPOINT_BY_CAMERA = {
 }
 
 
+def _resolve_video_keys(
+    info: dict[str, Any],
+    camera_mode: CameraMode,
+    wrist_camera_key: str,
+) -> list[str]:
+    """Resolve and validate the LeRobot video features used by ``camera_mode``.
+
+    NVIDIA's LIBERO conversion names the wrist camera
+    ``observation.images.wrist_image`` while common LeRobot conversions use
+    ``observation.images.image2``. Keeping the key explicit avoids guessing
+    when both fields are present and preserves the canonical NVIDIA default.
+    """
+    if not wrist_camera_key:
+        raise ValueError("wrist_camera_key must be a non-empty LeRobot feature name.")
+    if camera_mode == "image":
+        keys = [_IMAGE_FEATURE]
+    elif camera_mode == "wrist_image":
+        keys = [wrist_camera_key]
+    else:
+        keys = [_IMAGE_FEATURE, wrist_camera_key]
+
+    features = info.get("features", {})
+    missing = [key for key in keys if key not in features]
+    if missing:
+        raise ValueError(f"LIBERO dataset is missing video feature(s) {missing}; available={sorted(features)}")
+    return keys
+
+
 class LIBEROLeRobotDataset(ActionBaseDataset):
     """LIBERO action-policy dataset with frame-wise-relative rot6d actions.
 
@@ -72,6 +100,7 @@ class LIBEROLeRobotDataset(ActionBaseDataset):
         mode: str = "wam",
         tolerance_s: float = 1e-4,
         camera_mode: CameraMode = "concat_view",
+        wrist_camera_key: str = _WRIST_FEATURE,
         image_size: int = 256,
         action_space: str = "frame_wise_relative",
         rotation_space: RotationSpace = "6d",
@@ -122,6 +151,7 @@ class LIBEROLeRobotDataset(ActionBaseDataset):
             self._fps = float(info_fps)
             self._dt = 1.0 / self._fps
         self._camera_mode = camera_mode
+        self._wrist_camera_key = wrist_camera_key
         self._image_size = int(image_size)
         self._rotation_space = rotation_space.lower().strip()
         self._pose_coordinate_frame = pose_coordinate_frame
@@ -132,12 +162,7 @@ class LIBEROLeRobotDataset(ActionBaseDataset):
         self._stats_key = "global_raw" if action_normalization == "quantile_rot" else "global"
         self._stats_file = self._resolve_stats_file(action_stats_path)
 
-        if self._camera_mode == "image":
-            self._video_keys = [_IMAGE_FEATURE]
-        elif self._camera_mode == "wrist_image":
-            self._video_keys = [_WRIST_FEATURE]
-        else:
-            self._video_keys = [_IMAGE_FEATURE, _WRIST_FEATURE]
+        self._video_keys = _resolve_video_keys(self._info, self._camera_mode, self._wrist_camera_key)
 
         # Compact, lazy frame index (mirrors DROIDLeRobotDataset): read only the
         # columns the sample builder needs into contiguous arrays, ordered by global
@@ -321,7 +346,7 @@ class LIBEROLeRobotDataset(ActionBaseDataset):
             frames_by_view[key] = frames
         if self._camera_mode == "concat_view":
             # third-person (left) + wrist (right), horizontally concatenated -> [T, C, H, 2W]
-            return torch.cat([frames_by_view[_IMAGE_FEATURE], frames_by_view[_WRIST_FEATURE]], dim=-1)
+            return torch.cat([frames_by_view[self._video_keys[0]], frames_by_view[self._video_keys[1]]], dim=-1)
         return frames_by_view[self._video_keys[0]]
 
     def _resize(self, frames: torch.Tensor) -> torch.Tensor:
