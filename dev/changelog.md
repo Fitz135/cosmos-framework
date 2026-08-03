@@ -28,6 +28,21 @@ Use this template:
 - **Validation**: ...
 ```
 
+## DEV-0009 — 2026-08-03 23:41 +08:00 — Reduce Edge checkpoint frequency
+
+- **Area**: Cosmos3-Edge LIBERO checkpointing, qualitative visualization, and
+  attention-backend audit.
+- **Summary**: Changed periodic checkpoint and EMA rollout cadence from 500 to
+  2000 steps while preserving the trainer's final step-5000 checkpoint; audited
+  Flash Attention availability and recorded that the migrated environment does
+  not currently provide the FA3/FA2 packages.
+- **Documentation**: Updated the public LIBERO post-training guide and the full
+  development record with the new cadence, final-save behavior, and
+  evidence-bounded attention conclusion.
+- **Validation**: Ran Ruff, format, TOML parsing, launcher syntax, diff checks,
+  the focused Edge recipe tests, and static checks for trainer final-save and
+  H200 backend-priority behavior.
+
 ## DEV-0008 — 2026-08-03 23:24 +08:00 — Centralize experiment outputs
 
 - **Area**: Remote experiment storage policy.

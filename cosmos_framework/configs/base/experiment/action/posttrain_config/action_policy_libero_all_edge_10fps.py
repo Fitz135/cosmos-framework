@@ -137,10 +137,10 @@ action_policy_libero_all_edge_10fps = LazyDict(
                 grad_clip=dict(clip_norm=1.0, force_finite=True),
                 heart_beat=dict(every_n=200, save_s3=False, step_size=1, update_interval_in_minute=20),
                 iter_speed=dict(every_n=1, hit_thres=50, save_s3=False, save_s3_every_log_n=500),
-                # The trainer saves checkpoints before on_training_step_end, so
-                # this produces one qualitative EMA rollout after every save.
+                # The trainer saves periodic checkpoints before on_training_step_end,
+                # so this produces one qualitative EMA rollout after every periodic save.
                 libero_rollout=L(EveryNDrawSample)(
-                    every_n=500,
+                    every_n=2000,
                     n_viz_sample=1,
                     n_sample_to_save=1,
                     num_sampling_step=8,
@@ -170,7 +170,9 @@ action_policy_libero_all_edge_10fps = LazyDict(
             load_path="???",  # Cosmos3-Edge DCP dir; supply via TOML/env
             load_training_state=False,
             only_load_scheduler_state=False,
-            save_iter=100,
+            # Periodic saves are every 2000 steps. The trainer also saves max_iter
+            # when it is not divisible by this interval.
+            save_iter=2000,
             strict_resume=True,
             verbose=True,
             hf_export=dict(

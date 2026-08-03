@@ -169,18 +169,23 @@ The training recipe accepts `COSMOS3_EDGE_PROCESSOR_PATH`; PJLAB jobs set it to
 the staged Edge HF snapshot so model and dataset processor construction also
 remain offline.
 
-The effective dry-run confirmed FSDP shard degree 8, max batch 128, gradient
+The DEV-0005/DEV-0006 effective dry-run confirmed FSDP shard degree 8, max batch 128, gradient
 accumulation 2, LR `5e-5`, warmup 500, max iteration 5000, checkpoint interval
 500, W&B offline, full dataset split, 10 FPS, action chunk 8, `image2`, and the
-dataset-specific normalizer.
+dataset-specific normalizer. DEV-0009 changes future periodic saves to every
+2000 steps. The trainer's final-save guard means a default 5000-step run writes
+checkpoints at 2000, 4000, and 5000.
 Checkpoint-aligned qualitative visualization is part of the Edge recipe. The
 trainer writes the DCP before invoking `on_training_step_end`, where an
 `EveryNDrawSample` callback uses EMA weights to generate one joint WAM rollout
-every 500 optimizer steps. It saves a 10 FPS, three-row local video containing
+every 2000 optimizer steps. It saves a 10 FPS, three-row local video containing
 the prediction, clean-latent VAE reconstruction, and ground truth; offline W&B
 receives first/middle/last preview frames. The default uses guidance 1.0 and 8
 denoising steps, saves only rank 0, and does not write to object storage. This
-keeps the output aligned with checkpoints while bounding the periodic pause.
+keeps the output aligned with periodic checkpoints while bounding the pause.
+The final checkpoint at step 5000 is written after the training loop and does
+not fire the `EveryN` callback; its visualization remains an explicit post hoc
+operation.
 
 The completed `cosmos3-edge-libero-full-b128-2361150` process was launched
 before this callback was added and could not hot-load it. It was therefore not
@@ -407,3 +412,24 @@ rjob submit \
   passed in 3.25 s; the resolved-YAML config test passed with four unrelated
   tests deselected in 5.54 s; and direct TOML parsing passed. Development-pod
   Ruff, format, shell syntax, and diff checks also passed.
+
+### DEV-0009
+
+- Changed both the Python experiment baseline and structured TOML to save
+  periodic DCP checkpoints every 2000 steps. The EMA visualization callback now
+  uses the same cadence. Trainer final-save behavior preserves step 5000, so a
+  default run saves steps 2000, 4000, and 5000 while generating periodic
+  rollouts at steps 2000 and 4000.
+- Audited Flash Attention without changing its configuration. H200/SM90 orders
+  the Cosmos attention backends as `flash3`, `cudnn`, `natten`, then `flash2`,
+  and the CUDA 12.8 dependency group declares `flash-attn-3-nv` and
+  `flash-attn`. However, the completed-run evidence recorded Torch 2.10/CUDA
+  12.8 but not the backend actually selected, so historical Flash Attention 3
+  use is not proven.
+- The migrated persistent `.venv` currently uses Torch `2.13.0+cu130` and has
+  neither `flash-attn-3-nv` nor `flash-attn` installed. A new run that directly
+  uses this environment will therefore skip the external Flash Attention 3/2
+  backends and select the next compatible backend. Before claiming FA3 for a
+  future H200 run, use the CUDA 12.8 dependency group and record both a
+  successful `flash_attn_3_nv` import and the selected backend in the job log;
+  setting `I4_ATTN_BACKENDS=flash3` provides a fail-fast enforcement check.

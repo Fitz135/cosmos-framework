@@ -130,19 +130,24 @@ batch 2048 = `max_samples_per_batch` 128 × 16 ranks × grad_accum 1). They diff
 The Edge recipe uses one-node FSDP8 and global batch 2048 =
 `max_samples_per_batch` 128 × 8 ranks × grad accum 2. If 128 samples per rank
 OOMs, preserve global batch with `64/4`, then `32/8`, using the launcher's
-`EXTRA_TAIL_OVERRIDES`. W&B runs in offline mode.
+`EXTRA_TAIL_OVERRIDES`. W&B runs in offline mode. Periodic checkpoints are
+written every 2000 optimizer steps. For the default 5000-step run this produces
+`iter_000002000` and `iter_000004000`; the trainer's final-save guard also
+writes `iter_000005000` because 5000 is not divisible by 2000.
+
 The Edge recipe also generates one qualitative EMA WAM rollout after every
-checkpoint (every 500 optimizer steps). The callback jointly samples vision
-and action, then saves the video portion at 10 FPS. Its three rows are the
-predicted rollout, the clean-latent VAE reconstruction ceiling, and ground
+periodic checkpoint (every 2000 optimizer steps). The callback jointly samples
+vision and action, then saves the video portion at 10 FPS. Its three rows are
+the predicted rollout, the clean-latent VAE reconstruction ceiling, and ground
 truth. Only data-parallel rank 0 writes the local video; offline W&B records
-first, middle, and last preview frames.
+first, middle, and last preview frames. The final-save guard does not invoke an
+`EveryN` callback, so generate a step-5000 visualization post hoc if required.
 
 Videos are stored under:
 
 ```text
 <IMAGINAIRE_OUTPUT_ROOT>/cosmos3_action_libero/action_sft/
-  action_policy_libero_all_edge_10fps/EveryNDrawSample/Iter000000500/
+  action_policy_libero_all_edge_10fps/EveryNDrawSample/Iter000002000/
 ```
 
 The default uses one sample, guidance 1.0, and 8 denoising steps to bound the
@@ -150,7 +155,7 @@ training pause. Override the cadence or quality through the launcher, for
 example:
 
 ```bash
-EXTRA_TAIL_OVERRIDES="trainer.callbacks.libero_rollout.every_n=1000 trainer.callbacks.libero_rollout.num_sampling_step=30" \
+EXTRA_TAIL_OVERRIDES="trainer.callbacks.libero_rollout.every_n=4000 trainer.callbacks.libero_rollout.num_sampling_step=30" \
   bash examples/launch_sft_action_policy_libero_all_edge_10fps.sh
 ```
 

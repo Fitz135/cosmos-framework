@@ -91,11 +91,11 @@ def test_edge_recipe_uses_10fps_eight_action_full_dataset() -> None:
     )
 
 
-def test_edge_recipe_visualizes_one_ema_rollout_per_checkpoint() -> None:
+def test_edge_recipe_visualizes_one_ema_rollout_per_periodic_checkpoint() -> None:
     callback = _named_call("EveryNDrawSample")
 
     assert "from cosmos_framework.callbacks.every_n_draw_sample import EveryNDrawSample" in RECIPE_SOURCE
-    assert _literal_keyword(callback, "every_n") == 500
+    assert _literal_keyword(callback, "every_n") == 2000
     assert _literal_keyword(callback, "n_viz_sample") == 1
     assert _literal_keyword(callback, "n_sample_to_save") == 1
     assert _literal_keyword(callback, "num_sampling_step") == 8
@@ -118,7 +118,8 @@ def test_edge_toml_defines_fsdp8_global_batch_2048() -> None:
     }
     assert recipe["trainer"]["grad_accum_iter"] == 2
     assert recipe["trainer"]["max_iter"] == 5000
-    assert recipe["checkpoint"]["save_iter"] == 500
+    assert recipe["checkpoint"]["save_iter"] == 2000
+    assert "save_iter=2000" in RECIPE_SOURCE
     callback = _named_call("EveryNDrawSample")
     assert _literal_keyword(callback, "every_n") == recipe["checkpoint"]["save_iter"]
     assert 128 * 8 * recipe["trainer"]["grad_accum_iter"] == 2048
