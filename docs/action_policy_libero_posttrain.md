@@ -66,7 +66,9 @@ Its metadata must declare 10 FPS and include
 `observation.images.image` (third-person) plus
 `observation.images.image2` (wrist). It uses all episodes (`split=full`), 9
 observation frames and 8 actions per sample. The committed 10D rot6d statistics
-match this dataset's `[-1, 1]` gripper convention.
+match this dataset's `[-1, 1]` gripper convention. This recipe explicitly uses
+LeRobot's `pyav` video backend, avoiding a runtime dependency on TorchCodec's
+system FFmpeg shared libraries.
 
 Actions are `frame_wise_relative` rot6d (10D = pos 3 + rot6d 6 + gripper 1),
 `concat_view` (third-person + wrist, each 256×256 → 256×512), `quantile_rot`
@@ -129,6 +131,29 @@ The Edge recipe uses one-node FSDP8 and global batch 2048 =
 `max_samples_per_batch` 128 × 8 ranks × grad accum 2. If 128 samples per rank
 OOMs, preserve global batch with `64/4`, then `32/8`, using the launcher's
 `EXTRA_TAIL_OVERRIDES`. W&B runs in offline mode.
+The Edge recipe also generates one qualitative EMA WAM rollout after every
+checkpoint (every 500 optimizer steps). The callback jointly samples vision
+and action, then saves the video portion at 10 FPS. Its three rows are the
+predicted rollout, the clean-latent VAE reconstruction ceiling, and ground
+truth. Only data-parallel rank 0 writes the local video; offline W&B records
+first, middle, and last preview frames.
+
+Videos are stored under:
+
+```text
+<IMAGINAIRE_OUTPUT_ROOT>/cosmos3_action_libero/action_sft/
+  action_policy_libero_all_edge_10fps/EveryNDrawSample/Iter000000500/
+```
+
+The default uses one sample, guidance 1.0, and 8 denoising steps to bound the
+training pause. Override the cadence or quality through the launcher, for
+example:
+
+```bash
+EXTRA_TAIL_OVERRIDES="trainer.callbacks.libero_rollout.every_n=1000 trainer.callbacks.libero_rollout.num_sampling_step=30" \
+  bash examples/launch_sft_action_policy_libero_all_edge_10fps.sh
+```
+
 
 ## 3. Closed-loop eval
 

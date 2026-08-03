@@ -8,11 +8,34 @@ from pathlib import Path
 import pytest
 
 from cosmos_framework.inference.args import DEFAULT_CHECKPOINT, DEFAULT_CHECKPOINT_NAME, OmniSetupOverrides
-from cosmos_framework.inference.common.args import CheckpointConfig, CheckpointOverrides, CheckpointType, download_file
+from cosmos_framework.inference.common.args import (
+    CheckpointConfig,
+    CheckpointOverrides,
+    CheckpointType,
+    ConfigArgs,
+    ConfigFileType,
+    download_file,
+)
 
 CHECKPOINTS: dict[str, CheckpointConfig] = {
     DEFAULT_CHECKPOINT_NAME: DEFAULT_CHECKPOINT,
 }
+
+
+def test_load_config_dict_accepts_resolved_training_yaml(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("model:\n  config:\n    max_action_dim: 64\ntrainer:\n  max_iter: 5000\n")
+    args = ConfigArgs(
+        config_file=str(config_path),
+        config_file_type=ConfigFileType.YAML,
+        experiment="",
+        experiment_overrides=["trainer.max_iter=22"],
+    )
+
+    assert args.load_config_dict() == {
+        "model": {"config": {"max_action_dim": 64}},
+        "trainer": {"max_iter": 22},
+    }
 
 
 def test_num_iterations_requires_benchmark() -> None:
@@ -36,9 +59,7 @@ def test_download_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # Disable the URL cache; this test asserts each download is independent.
     monkeypatch.delenv("COSMOS_DOWNLOAD_CACHE_DIR", raising=False)
 
-    download_url_1 = (
-        "https://github.com/nvidia-cosmos/cosmos-dependencies/raw/2b17a2413bd86b2cf9b03823637108851e4ddf2d/inputs/vision/robot_153.jpg"
-    )
+    download_url_1 = "https://github.com/nvidia-cosmos/cosmos-dependencies/raw/2b17a2413bd86b2cf9b03823637108851e4ddf2d/inputs/vision/robot_153.jpg"
     file_size_1 = 279410
 
     download_url_2 = "https://github.com/nvidia-cosmos/cosmos-dependencies/raw/2b17a2413bd86b2cf9b03823637108851e4ddf2d/inputs/vision/bus_terminal.jpg"

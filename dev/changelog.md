@@ -28,6 +28,22 @@ Use this template:
 - **Validation**: ...
 ```
 
+## DEV-0006 — 2026-08-03 20:07 +08:00 — Complete Edge LIBERO training and export
+
+- **Area**: Cosmos3-Edge LIBERO training, qualitative visualization, model
+  export, and real-sample action-policy validation.
+- **Summary**: Added portable PyAV decoding, checkpoint-aligned EMA rollout
+  visualization, resolved-config export compatibility, action-policy metadata,
+  bundled Edge assets, and final 5000-step training and export evidence.
+- **Documentation**: Updated the generic LIBERO guide for PyAV and qualitative
+  rollout behavior, and synchronized complete PJLAB job IDs, checkpoints,
+  failures, metrics, export contents, and forward evidence in the dev record.
+- **Validation**: Ruff, format, shell syntax, TOML parsing, and diff checks
+  passed; 16 focused tests passed in the isolated CUDA 12.8 environment; the
+  8×H200 run reached iteration 5000; the final 7.3 GiB export loaded with its
+  bundled Edge assets; and a real merged-LIBERO sample produced finite
+  `[1, 8, 10]` actions.
+
 ## DEV-0005 — 2026-07-30 18:53 +08:00 — Add Cosmos3-Edge LIBERO recipe
 
 - **Area**: Cosmos3-Edge action-policy post-training and offline checkpoint

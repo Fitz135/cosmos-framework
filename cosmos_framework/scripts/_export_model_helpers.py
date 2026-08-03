@@ -11,10 +11,12 @@ lazily and accept an injectable download callable.
 from __future__ import annotations
 
 import contextlib
+import inspect
 import json
 import re
 import shutil
 from pathlib import Path
+from pydoc import locate
 from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
@@ -44,6 +46,129 @@ _BUNDLE_CONFIG_DICT_KEYS = ("vision_config", "projector_config")
 _BUNDLE_CONFIG_TOKEN_ID_KEYS = ("image_token_id", "video_token_id", "vision_start_token_id")
 
 _HF_SNAPSHOT_RE = re.compile(r"/snapshots/([0-9a-f]{40})(?:/|$)")
+
+
+def _config_value(config: Any, key: str) -> Any:
+    if isinstance(config, dict):
+        return config.get(key)
+    return getattr(config, key, None)
+
+
+def _dataset_config_value(dataset_config: Any, key: str) -> Any:
+    value = _config_value(dataset_config, key)
+    if value is not None:
+        return value
+
+    target = _config_value(dataset_config, "_target_") or _config_value(dataset_config, "_target")
+    if target is None:
+        return None
+    if isinstance(target, str):
+        target = locate(target)
+        if target is None:
+            return None
+    try:
+        parameter = inspect.signature(target).parameters.get(key)
+    except (TypeError, ValueError):
+        return None
+    if parameter is None or parameter.default is inspect.Parameter.empty:
+        return None
+    return parameter.default
+
+
+def _edge_action_dataset_configs(training_config: Any) -> list[Any]:
+    """Return action dataset configs from legacy and packing dataloaders."""
+    dataloader_train = _config_value(training_config, "dataloader_train")
+
+    # Legacy action recipes wrap datasets in the joint-dataloader hierarchy.
+    dataloaders = _config_value(dataloader_train, "dataloaders")
+    action_data = _config_value(dataloaders, "action_data")
+    action_dataloader = _config_value(action_data, "dataloader")
+    wrapper_config = _config_value(action_dataloader, "dataset")
+    legacy_entries = _config_value(wrapper_config, "list_of_datasets")
+    if legacy_entries:
+        configs = [_config_value(entry, "dataset") for entry in legacy_entries]
+        if all(config is not None for config in configs):
+            return configs
+
+    # PackingDataLoader recipes place named dataset entries directly under the
+    # rank-partitioned dataloader.
+    packed_dataloader = _config_value(dataloader_train, "dataloader")
+    packed_entries = _config_value(packed_dataloader, "datasets")
+    if packed_entries:
+        entries = packed_entries.values() if hasattr(packed_entries, "values") else packed_entries
+        configs = [_config_value(entry, "dataset") for entry in entries]
+        if configs and all(config is not None for config in configs):
+            return configs
+
+    raise ValueError(
+        "Cosmos3 Edge export requires action dataset configs at either "
+        "dataloader_train.dataloaders.action_data.dataloader.dataset.list_of_datasets "
+        "or dataloader_train.dataloader.datasets."
+    )
+
+
+def build_edge_policy_metadata(training_config: Any) -> dict[str, Any]:
+    """Resolve policy manifest fields from an action experiment config."""
+    metadata_by_dataset: list[dict[str, Any]] = []
+    for action_dataset_config in _edge_action_dataset_configs(training_config):
+        target = _config_value(action_dataset_config, "_target_") or _config_value(action_dataset_config, "_target")
+        action_chunk_size = _dataset_config_value(action_dataset_config, "chunk_length")
+        conditioning_fps = _dataset_config_value(action_dataset_config, "fps")
+        domain_name = _dataset_config_value(action_dataset_config, "embodiment_type")
+        if domain_name is None and target is not None:
+            domain_name = getattr(target, "EMBODIMENT_TYPE", None)
+
+        if not isinstance(action_chunk_size, int) or isinstance(action_chunk_size, bool) or action_chunk_size <= 0:
+            raise ValueError(
+                "Cosmos3 Edge action dataset config must define a positive integer `chunk_length`, "
+                f"got {action_chunk_size!r}."
+            )
+        if (
+            not isinstance(conditioning_fps, (int, float))
+            or isinstance(conditioning_fps, bool)
+            or conditioning_fps <= 0
+        ):
+            raise ValueError(
+                f"Cosmos3 Edge action dataset config must define a positive numeric `fps`, got {conditioning_fps!r}."
+            )
+        if not isinstance(domain_name, str) or not domain_name.strip():
+            target_name = getattr(target, "__name__", repr(target))
+            raise ValueError(
+                "Cosmos3 Edge action dataset config must define `embodiment_type` or expose "
+                f"`EMBODIMENT_TYPE`; dataset target is {target_name}."
+            )
+
+        metadata_by_dataset.append(
+            {
+                "action_chunk_size": action_chunk_size,
+                "conditioning_fps": float(conditioning_fps),
+                "domain_name": domain_name.strip(),
+            }
+        )
+
+    metadata = metadata_by_dataset[0]
+    for field in metadata:
+        if any(dataset_metadata[field] != metadata[field] for dataset_metadata in metadata_by_dataset[1:]):
+            raise ValueError(
+                "Cosmos3 Edge checkpoint.json can represent only one action policy metadata value per field; "
+                f"the configured datasets disagree on `{field}`."
+            )
+    return metadata
+
+
+def canonicalize_edge_local_processor(model_dict: dict[str, Any]) -> bool:
+    """Replace an export-host-local Edge processor path with its public family name."""
+    tokenizer_cfg = ((model_dict.get("config") or {}).get("vlm_config") or {}).get("tokenizer")
+    if not isinstance(tokenizer_cfg, dict) or tokenizer_cfg.get("repository"):
+        return False
+    tokenizer_type = tokenizer_cfg.get("tokenizer_type")
+    if not isinstance(tokenizer_type, str) or not Path(tokenizer_type).is_dir():
+        return False
+    tokenizer_cfg["repository"] = None
+    tokenizer_cfg["revision"] = None
+    tokenizer_cfg["subdir"] = ""
+    tokenizer_cfg["tokenizer_type"] = _EDGE_MODEL_NAME
+    return True
 
 
 def is_edge_model(model_dict: dict[str, Any]) -> bool:

@@ -4,8 +4,12 @@
 
 - Branch: `feature/cosmos3-edge-libero`
 - Base branch: `main`
-- Current phase: DEV-0005 validated and ready to commit
-- Full training: not started
+- Current phase: DEV-0006 complete
+- Full training: `cosmos3-edge-libero-full-b128-2361150` succeeded at
+  iteration 5000
+- Final DCP: `iter_000005000` (30 GiB on GPFS)
+- Final HF/safetensors export: `export-final-iter5000` (7.3 GiB)
+- Final real-sample action check: finite `[1, 8, 10]` output
 
 ## Objective
 
@@ -169,6 +173,48 @@ The effective dry-run confirmed FSDP shard degree 8, max batch 128, gradient
 accumulation 2, LR `5e-5`, warmup 500, max iteration 5000, checkpoint interval
 500, W&B offline, full dataset split, 10 FPS, action chunk 8, `image2`, and the
 dataset-specific normalizer.
+Checkpoint-aligned qualitative visualization is part of the Edge recipe. The
+trainer writes the DCP before invoking `on_training_step_end`, where an
+`EveryNDrawSample` callback uses EMA weights to generate one joint WAM rollout
+every 500 optimizer steps. It saves a 10 FPS, three-row local video containing
+the prediction, clean-latent VAE reconstruction, and ground truth; offline W&B
+receives first/middle/last preview frames. The default uses guidance 1.0 and 8
+denoising steps, saves only rank 0, and does not write to object storage. This
+keeps the output aligned with checkpoints while bounding the periodic pause.
+
+The completed `cosmos3-edge-libero-full-b128-2361150` process was launched
+before this callback was added and could not hot-load it. It was therefore not
+interrupted only to enable visualization. The callback applies to future
+resumes or new runs; complete checkpoints can also be visualized post hoc
+without changing their weights.
+
+Generic behavior and override syntax are mirrored in
+`docs/action_policy_libero_posttrain.md`; PJLAB execution evidence and output
+paths remain here.
+
+
+Training jobs use one private 8×H200 node, 120 CPU cores, 1800000 MiB host
+memory, host networking/shared memory, gang start, eight shared RDMA devices,
+one Mellanox RDMA device, `brainpp.cn/fuse=1`, and the same GPFS mount:
+
+```bash
+source /etc/profile.d/ssh-init.sh
+rjob submit \
+  --name cosmos3-edge-libero-<mode>-b128 \
+  --charged-group llmagent_gpu \
+  --private-machine group \
+  --image registry.h.pjlab.org.cn/ailab-llmrazor/xtuner_tmp:pt28_20260303_f2adb47 \
+  --cpu 120 --gpu 8 --memory 1800000 \
+  --share-host-shm=True --host-network=true --gang-start=true \
+  --custom-resources \
+    rdma/mlnx_shared=8 mellanox.com/mlnx_rdma=1 brainpp.cn/fuse=1 \
+  --mount gpfs://gpfs2/intern-pretrain-shared02:/mnt/shared-storage-gpfs2/intern-pretrain-shared02 \
+  --set-env \
+    COSMOS_LIBERO_MODE=<smoke|resume|full> \
+    RESUME_CHECKPOINT=<required-for-resume-and-full> \
+    PER_RANK_BATCH=128 GRAD_ACCUM=2 -- \
+  bash /mnt/shared-storage-gpfs2/intern-pretrain-shared02/lutianyi/.cache/cosmos3_edge_libero_job.sh
+```
 
 ## Implementation log
 
@@ -184,8 +230,9 @@ dataset-specific normalizer.
   with video shape `[3, 9, 256, 512]` and action shape `[8, 10]`.
 - The GPU-less development pod's default TorchCodec path cannot load
   `libnppicc.so.12`; the CPU integration check therefore explicitly selected
-  LeRobot's PyAV backend. The rjob smoke test must verify the default TorchCodec
-  path in the CUDA container before full training.
+  LeRobot's PyAV backend. DEV-0006 made that backend an explicit, portable
+  recipe setting after the CUDA image also proved unable to load TorchCodec's
+  required FFmpeg libraries.
 
 ### DEV-0005
 
@@ -211,5 +258,152 @@ dataset-specific normalizer.
 
 ### DEV-0006
 
-Pending: record rjob smoke training, resume validation, full training, export,
-and real-sample forward validation.
+- `cosmos3-edge-libero-smoke-b128-57317639`: failed before model loading
+  because the wrapper called the image's system `torchrun`, whose Python
+  environment lacked `omegaconf`. The PJLAB job wrapper now puts the repository
+  `.venv/bin` first on `PATH`.
+- `cosmos3-edge-libero-smoke-b128-r2-39257879`: reached distributed
+  initialization and dataset construction, then failed because TorchCodec
+  could not load any supported FFmpeg `libavutil.so`. The dataset now exposes a
+  backward-compatible `video_backend`, and the Edge recipe selects `pyav`.
+- `cosmos3-edge-libero-smoke-b128-r3-9912282`: succeeded on 8×H200 with
+  batch/accumulation `128/2`. It loaded all 549 base-model keys while
+  intentionally warm-starting `net_ema`, ran 20 steps without OOM, and wrote
+  `iter_000000020`. The first compiled step took 88.65 s; steady-state steps
+  took about 19.6 s. Rank losses were about `15.12–15.69` at step 1 and
+  `14.35–15.14` at step 20.
+- `cosmos3-edge-libero-resume-b128-76675783`: succeeded. It restored the model,
+  all 2898 optimizer state items, scheduler, trainer, RNG state, and iteration
+  20; then ran steps 21–22 and wrote `iter_000000022`. Step-22 rank losses were
+  `14.48–15.52`.
+- `cosmos3-edge-libero-full-b128-2361150`: started from `iter_000000022` with
+  the validated `128/2` setting and succeeded at iteration 5000. The final
+  rank-0 loss was `0.5654`; `iter_000005000` saved in 2.98 s.
+  The trainer logged `Done with training` at 2026-07-31 14:56:37 +08:00.
+  The complete DCP occupies 30 GiB and contains eight model shards of about
+  2.53 GB plus eight optimizer shards of about 1.42 GB, together with trainer,
+  scheduler, RNG, and metadata state. The checkpoint is at
+  `/mnt/shared-storage-gpfs2/intern-pretrain-shared02/lutianyi/model/cosmos3-edge-libero-all-10fps/cosmos3_action_libero/action_sft/action_policy_libero_all_edge_10fps_full/checkpoints/iter_000005000`.
+  The offline W&B run is
+  `/mnt/shared-storage-gpfs2/intern-pretrain-shared02/lutianyi/model/cosmos3-edge-libero-all-10fps/cosmos3_action_libero/action_sft/action_policy_libero_all_edge_10fps_full/wandb/offline-run-20260730_112114-pk7bdv6q`.
+
+- Added `PackingDataLoader` support to Edge export policy metadata extraction
+  while retaining the legacy joint-dataloader layout. Resolved training YAML
+  can now be inspected without a legacy root `_type`, and the LIBERO wrapper
+  exposes its default `embodiment_type` for export.
+- `cosmos3-edge-libero-export-check-21245457`: exposed the missing root `_type`
+  compatibility issue before reading weights.
+- `cosmos3-edge-libero-export-check-r2-21420917`: passed raw-config loading and
+  exposed that the resolved wrapper config did not contain a policy domain.
+- `cosmos3-edge-libero-export-check-r3-80137598`: succeeded on one H200. Its
+  generated `checkpoint.json` contains `action_chunk_size=8`,
+  `conditioning_fps=10.0`, and `domain_name=libero`.
+- Five focused export-metadata tests and the focused Edge recipe/export suite
+  passed. The new resolved-config unit test cannot collect on the development
+  pod because its existing `transformer_engine` import requires `libcudart`;
+  the real H200 export precheck validates that path end to end.
+- `cosmos3-edge-libero-export-smoke-53586371`: completed a provisional
+  safetensors export from the resume checkpoint. The 7.3 GiB result contains
+  two model shards, the 979 MB Edge vision encoder, processor/tokenizer files,
+  export manifest, and correct policy metadata.
+- `cosmos3-edge-libero-forward-smoke-32878448`: the real sample loaded, but the
+  action service's default guardrails imported OpenCV/RetinaFace and failed on
+  the container's missing `libxcb.so.1`. The isolated forward checker now
+  disables unrelated guardrails.
+- `cosmos3-edge-libero-forward-smoke-r2-12363635`: the exported model loaded,
+  then the checker exposed an incorrect normalizer-statistics path. It also
+  showed that the export's bundled processor was bypassed because the public
+  config retained the PJLAB-local processor path.
+- `cosmos3-edge-libero-export-smoke-r2-37086228`: an initial attempt to scrub
+  the local processor path before model construction selected the registered
+  object-store processor and failed for missing credentials. Canonicalization
+  was moved to the final public-config rewrite, after local model construction
+  and processor bundling.
+- `cosmos3-edge-libero-export-smoke-r3-61518455`: succeeded. The public config
+  contains `nvidia/Cosmos3-Edge-Reasoner` rather than a PJLAB path, while the
+  export remains self-contained through its bundled processor.
+- `cosmos3-edge-libero-forward-smoke-r3-10700008`: succeeded on one H200 with
+  real merged-LIBERO sample 0. The prompt was “put the white mug on the left
+  plate and put the yellow and white mug on the right plate”; input video shape
+  was `[3, 9, 256, 512]`; the offline exported model loaded in 10.98 s and a
+  two-denoising-step forward completed in 22.57 s; the finite denormalized
+  action output had shape `[1, 8, 10]` and range `[-2.3340, 1.4602]`.
+- Added checkpoint-aligned qualitative visualization to the Edge training
+  recipe. Every save interval now triggers one EMA WAM sample and stores a
+  local 10 FPS prediction/VAE-reconstruction/ground-truth video plus offline
+  W&B preview frames. Static configuration tests lock its cadence, rank count,
+  sampling settings, and local-only output behavior.
+- The first visualization dry-run submission was rejected before job creation
+  because the one-GPU request was incompatible with host networking.
+  `cosmos3-edge-libero-viz-dryrun-r2-66499044` then succeeded and resolved
+  exactly one `libero_rollout` callback with one EMA sample, 8 denoising steps,
+  10 FPS, local-only output, and cadence 500.
+- `cosmos3-edge-libero-viz-smoke-37737720`,
+  `cosmos3-edge-libero-viz-smoke-r2-55564857`, and
+  `cosmos3-edge-libero-viz-smoke-fsdp8-67119292` failed in the CUDA preflight
+  without loading a checkpoint. A development-pod `uv run` had unexpectedly
+  synchronized the shared `.venv` from the verified `torch 2.10.0+cu128` to
+  `torch 2.13.0+cu130`; the already-running full job was unaffected because
+  its process had loaded the old libraries before that change. New validation
+  jobs therefore build an isolated node-local CUDA 12.8 environment without
+  modifying or restarting the full job.
+- `cosmos3-edge-libero-viz-smoke-fsdp8-r3-83728679` and
+  `cosmos3-edge-libero-viz-smoke-fsdp8-r4-75714959` failed before CUDA
+  preflight because the H200 node's PyPI proxy timed out while fetching NVRTC
+  and CMake respectively. The replacement flow copies non-CUDA packages from
+  the existing environment, restores the locked CUDA 12.8 packages from the
+  shared uv cache, and installs a staged NVRTC wheel only after verifying its
+  SHA256
+  `a7756528852ef889772a84c6cd89d41dfa74667e24cca16bb31f8f061e3e9994`.
+- `cosmos3-edge-libero-viz-smoke-fsdp8-r5-22977600` passed the CUDA preflight
+  and reached 8-rank `torchrun`, but an unanchored temporary rsync exclusion
+  also removed `wandb/integration/torch`; it failed before model loading and
+  produced no training artifact. Anchoring exclusions to the top-level
+  `site-packages` CUDA packages fixed this environment-only issue.
+- `cosmos3-edge-libero-viz-smoke-fsdp8-r6-84101056` succeeded end to end on
+  8×H200. The preflight reported `torch 2.10.0+cu128`, CUDA 12.8 available,
+  and all eight H200s. It restored `iter_000000022`, ran iteration 23 with
+  rank-0 loss `15.1887`, saved `iter_000000023` in 6.93 s, switched to EMA,
+  and completed the 8-step UniPC sample in 8.30 s.
+- The validated local artifact is
+  `cosmos3_action_libero/action_sft/action_policy_libero_all_edge_10fps_viz_smoke_fsdp8/EveryNDrawSample/Iter000000023/ema_ReplicateID0000_Sample_Iter000000023.mp4`.
+  FFprobe reports H.264, `320×576`, 10 FPS, 9 frames, and 0.9 s duration. Its
+  three vertically stacked rows are prediction, VAE reconstruction, and ground
+  truth. The reconstruction and ground truth are coherent, while the iteration
+  23 prediction is still noise-like, as expected for this deliberately early
+  checkpoint; this confirms that the visualization exposes qualitative
+  convergence rather than masking it.
+- Final training, export, and forward validation are complete.
+- `cosmos3-edge-libero-final-export-94756306` used the final run config,
+  `iter_000005000`, and the GPFS-local Edge HF vision bundle and succeeded on
+  one H200. The output is at
+  `/mnt/shared-storage-gpfs2/intern-pretrain-shared02/lutianyi/model/cosmos3-edge-libero-all-10fps/export-final-iter5000`.
+  The 7.3 GiB export has two model shards of 5,000,054,640 and 1,739,338,512
+  bytes, a 978,739,880-byte bundled vision encoder, and bundled processor and
+  tokenizer files. `checkpoint.json` records action chunk 8, 10 FPS, domain
+  `libero`, and EMA weights. The public model and processor configuration
+  replaced the export-host-local processor with
+  `nvidia/Cosmos3-Edge-Reasoner`; no PJLAB processor path remains in those
+  public fields.
+- `cosmos3-edge-libero-final-forward-81163290-6-170ed` was stopped without
+  starting because its mistyped GPFS source (`gpfs2-intern-...`) caused the
+  storage admission webhook to receive an empty site. The corrected submission
+  uses `gpfs://gpfs2/intern-pretrain-shared02:...`.
+- `cosmos3-edge-libero-final-forward-r2-4620973-e0067` succeeded on one H200
+  with real merged-LIBERO sample 0. The prompt was “put the white mug on the
+  left plate and put the yellow and white mug on the right plate”; input video
+  shape was `[3, 9, 256, 512]`; model load took 9.903 s and a two-step forward
+  took 16.196 s. The denormalized action output was finite with shape
+  `[1, 8, 10]` and range `[-1.0180979, 1.0006449]`. The machine-readable report
+  is at
+  `/mnt/shared-storage-gpfs2/intern-pretrain-shared02/lutianyi/model/cosmos3-edge-libero-all-10fps/forward-final-iter5000.json`.
+- `cosmos3-edge-libero-final-validate-62811407-d389a` used the copied
+  `pytest` console script, whose absolute shebang still selected the polluted
+  shared `.venv`; collection therefore failed on its torch/torchvision version
+  mismatch. The corrected validation invokes the node-local Python with
+  `-m pytest` so the verified CUDA 12.8 environment is authoritative.
+- `cosmos3-edge-libero-final-validate-r2-314760-71180` succeeded on one H200
+  with `torch 2.10.0+cu128`: 15 focused recipe, dataset, and export-policy tests
+  passed in 3.25 s; the resolved-YAML config test passed with four unrelated
+  tests deselected in 5.54 s; and direct TOML parsing passed. Development-pod
+  Ruff, format, shell syntax, and diff checks also passed.

@@ -79,14 +79,32 @@ def test_edge_recipe_uses_10fps_eight_action_full_dataset() -> None:
     dataset = _named_call("get_action_libero_sft_dataset")
 
     assert _literal_keyword(dataset, "root") == "${oc.env:LIBERO_ROOT}"
+    assert _literal_keyword(dataset, "embodiment_type") == "libero"
     assert _literal_keyword(dataset, "fps") == 10
     assert _literal_keyword(dataset, "chunk_length") == 8
     assert _literal_keyword(dataset, "camera_mode") == "concat_view"
     assert _literal_keyword(dataset, "wrist_camera_key") == "observation.images.image2"
+    assert _literal_keyword(dataset, "video_backend") == "pyav"
     assert _literal_keyword(dataset, "split") == "full"
     assert _literal_keyword(dataset, "action_stats_path") == (
         "libero_10fps_pm_one_native_frame_wise_relative_rot6d.json"
     )
+
+
+def test_edge_recipe_visualizes_one_ema_rollout_per_checkpoint() -> None:
+    callback = _named_call("EveryNDrawSample")
+
+    assert "from cosmos_framework.callbacks.every_n_draw_sample import EveryNDrawSample" in RECIPE_SOURCE
+    assert _literal_keyword(callback, "every_n") == 500
+    assert _literal_keyword(callback, "n_viz_sample") == 1
+    assert _literal_keyword(callback, "n_sample_to_save") == 1
+    assert _literal_keyword(callback, "num_sampling_step") == 8
+    assert _literal_keyword(callback, "guidance") == [1.0]
+    assert _literal_keyword(callback, "do_x0_prediction") is False
+    assert _literal_keyword(callback, "save_s3") is False
+    assert _literal_keyword(callback, "save_local") is True
+    assert _literal_keyword(callback, "is_ema") is True
+    assert _literal_keyword(callback, "fps") == 10
 
 
 def test_edge_toml_defines_fsdp8_global_batch_2048() -> None:
@@ -101,4 +119,6 @@ def test_edge_toml_defines_fsdp8_global_batch_2048() -> None:
     assert recipe["trainer"]["grad_accum_iter"] == 2
     assert recipe["trainer"]["max_iter"] == 5000
     assert recipe["checkpoint"]["save_iter"] == 500
+    callback = _named_call("EveryNDrawSample")
+    assert _literal_keyword(callback, "every_n") == recipe["checkpoint"]["save_iter"]
     assert 128 * 8 * recipe["trainer"]["grad_accum_iter"] == 2048

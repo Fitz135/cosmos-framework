@@ -376,6 +376,26 @@ class ConfigArgs(ArgsBase):
             case _:
                 assert_never(self.config_file_type)
 
+    def load_config_dict(self) -> dict:
+        """Load the full config without requiring a structured root type.
+
+        Training output YAML files intentionally contain the resolved config
+        fields without an ``_type`` marker. Consumers that only need to inspect
+        values should use this method instead of structuring the root as
+        :class:`Config`.
+        """
+        match self.config_file_type:
+            case ConfigFileType.MODULE:
+                return unstructure_config(self.load_config())
+            case ConfigFileType.YAML | ConfigFileType.JSON:
+                config_dict = deserialize_config_dict(Path(self.config_file))
+                overrides_omegaconf = OmegaConf.from_dotlist(self.experiment_overrides)
+                merged = OmegaConf.to_container(OmegaConf.merge(config_dict, overrides_omegaconf), resolve=False)
+                assert isinstance(merged, dict)
+                return merged
+            case _:
+                assert_never(self.config_file_type)
+
     def load_model_config_dict(self) -> dict:
         """Load model config dict."""
         match self.config_file_type:
@@ -431,8 +451,7 @@ class CheckpointType(StrEnum):
         transformer_path = path / "transformer"
         has_root_hf_weights = any(path.glob("*.safetensors")) or any(path.glob("*.safetensors.index.json"))
         has_diffusers_hf_weights = (path / "model_index.json").is_file() and (
-            any(transformer_path.glob("*.safetensors"))
-            or any(transformer_path.glob("*.safetensors.index.json"))
+            any(transformer_path.glob("*.safetensors")) or any(transformer_path.glob("*.safetensors.index.json"))
         )
         has_hf_weights = has_root_hf_weights or has_diffusers_hf_weights
         if has_hf_weights:

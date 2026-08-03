@@ -15,6 +15,7 @@ import os
 
 from hydra.core.config_store import ConfigStore
 
+from cosmos_framework.callbacks.every_n_draw_sample import EveryNDrawSample
 from cosmos_framework.configs.base.experiment.sft.models.edge_model_config import EDGE_MODEL_CONFIG
 from cosmos_framework.data.generator.action.datasets.action_sft_dataset import get_action_libero_sft_dataset
 from cosmos_framework.data.generator.joint_dataloader import (
@@ -136,6 +137,20 @@ action_policy_libero_all_edge_10fps = LazyDict(
                 grad_clip=dict(clip_norm=1.0, force_finite=True),
                 heart_beat=dict(every_n=200, save_s3=False, step_size=1, update_interval_in_minute=20),
                 iter_speed=dict(every_n=1, hit_thres=50, save_s3=False, save_s3_every_log_n=500),
+                # The trainer saves checkpoints before on_training_step_end, so
+                # this produces one qualitative EMA rollout after every save.
+                libero_rollout=L(EveryNDrawSample)(
+                    every_n=500,
+                    n_viz_sample=1,
+                    n_sample_to_save=1,
+                    num_sampling_step=8,
+                    guidance=[1.0],
+                    do_x0_prediction=False,
+                    save_s3=False,
+                    save_local=True,
+                    is_ema=True,
+                    fps=10,
+                ),
                 low_precision=dict(update_iter=1),
                 manual_gc=dict(every_n=5, gc_level=1, warm_up=1),
                 param_count=dict(save_s3=False),
@@ -193,12 +208,14 @@ action_policy_libero_all_edge_10fps = LazyDict(
                         ratio=1,
                         dataset=L(get_action_libero_sft_dataset)(
                             root="${oc.env:LIBERO_ROOT}",
+                            embodiment_type="libero",
                             fps=10,
                             chunk_length=8,
                             image_size=256,  # concat_view -> 256x512
                             mode="wam",
                             camera_mode="concat_view",
                             wrist_camera_key="observation.images.image2",
+                            video_backend="pyav",
                             action_space="frame_wise_relative",
                             rotation_space="6d",
                             pose_coordinate_frame="native",

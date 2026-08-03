@@ -6,6 +6,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import torch
+from lerobot.datasets import video_utils
 
 from cosmos_framework.data.generator.action.datasets.libero_lerobot_dataset import (
     LIBEROLeRobotDataset,
@@ -56,3 +57,25 @@ def test_eight_action_chunk_uses_nine_observation_frames() -> None:
 
     assert result["video"].shape == (9, 3, 4, 8)
     assert result["action"].shape == (8, 10)
+
+
+def test_load_video_forwards_selected_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str | None] = []
+
+    def _decode(_path, timestamps, _tolerance_s, backend=None):
+        calls.append(backend)
+        return torch.zeros((len(timestamps), 3, 4, 4))
+
+    monkeypatch.setattr(video_utils, "decode_video_frames", _decode)
+    dataset = object.__new__(LIBEROLeRobotDataset)
+    dataset._video_keys = [_IMAGE]
+    dataset._video_backend = "pyav"
+    dataset._camera_mode = "image"
+    dataset._tolerance_s = 1e-4
+    dataset._image_size = 4
+    dataset._video_path = lambda _episode, _key: "/tmp/video.mp4"
+
+    frames = dataset._load_video({}, [0.0, 0.1])
+
+    assert frames.shape == (2, 3, 4, 4)
+    assert calls == ["pyav"]

@@ -214,12 +214,14 @@ def get_action_droid_merged_lerobot_sft_dataset(
 def get_action_libero_sft_dataset(
     *,
     root: str,
+    embodiment_type: str = "libero",
     fps: float = 20.0,
     chunk_length: int = 16,
     image_size: int = 256,
     mode: str = "wam",
     camera_mode: str = "concat_view",
     wrist_camera_key: str = "observation.images.wrist_image",
+    video_backend: str | None = None,
     action_space: str = "frame_wise_relative",
     rotation_space: str = "6d",
     pose_coordinate_frame: str = "native",
@@ -245,10 +247,13 @@ def get_action_libero_sft_dataset(
     Feeds ``LIBEROLeRobotDataset`` (frame-wise-relative rot6d actions,
     ``quantile_rot``-normalized, concat_view third-person + wrist at 256x256 each
     → 256x512) through ``ActionTransformPipeline``. ``root`` is a LOCAL LeRobot dir
-    (read parquet + video directly). ``wrist_camera_key`` defaults to NVIDIA's
+    (read parquet + video directly). ``embodiment_type`` becomes the exported
+    policy domain and defaults to ``"libero"``. ``wrist_camera_key`` defaults to NVIDIA's
     canonical ``observation.images.wrist_image``; pass
     ``observation.images.image2`` for community LeRobot conversions that use that
-    feature for the wrist view. Pre-sync the HF dataset once, e.g. ``hf download
+    feature for the wrist view. ``video_backend`` is forwarded to LeRobot's
+    decoder; use ``"pyav"`` when TorchCodec's FFmpeg shared libraries are not
+    available. Pre-sync the HF dataset once, e.g. ``hf download
     lerobot/libero_10 --repo-type dataset --local-dir <root>``. Point ``root`` at
     libero_10 alone. The
     dataset is FPS-agnostic (decodes at real frame timestamps); ``fps`` is metadata
@@ -256,6 +261,7 @@ def get_action_libero_sft_dataset(
     """
     dataset = LIBEROLeRobotDataset(
         root=root,
+        embodiment_type=embodiment_type,
         image_size=image_size,
         chunk_length=chunk_length,
         fps=fps,
@@ -265,6 +271,7 @@ def get_action_libero_sft_dataset(
         seed=seed,
         camera_mode=camera_mode,
         wrist_camera_key=wrist_camera_key,
+        video_backend=video_backend,
         action_space=action_space,
         rotation_space=rotation_space,
         pose_coordinate_frame=pose_coordinate_frame,

@@ -101,6 +101,7 @@ class LIBEROLeRobotDataset(ActionBaseDataset):
         tolerance_s: float = 1e-4,
         camera_mode: CameraMode = "concat_view",
         wrist_camera_key: str = _WRIST_FEATURE,
+        video_backend: str | None = None,
         image_size: int = 256,
         action_space: str = "frame_wise_relative",
         rotation_space: RotationSpace = "6d",
@@ -152,6 +153,7 @@ class LIBEROLeRobotDataset(ActionBaseDataset):
             self._dt = 1.0 / self._fps
         self._camera_mode = camera_mode
         self._wrist_camera_key = wrist_camera_key
+        self._video_backend = video_backend
         self._image_size = int(image_size)
         self._rotation_space = rotation_space.lower().strip()
         self._pose_coordinate_frame = pose_coordinate_frame
@@ -341,6 +343,7 @@ class LIBEROLeRobotDataset(ActionBaseDataset):
                 self._video_path(episode, key),
                 [from_ts + ts for ts in timestamps],
                 self._tolerance_s,
+                backend=self._video_backend,
             )  # [T, C, H, W] in [0, 1]
             frames = self._resize(frames)
             frames_by_view[key] = frames
