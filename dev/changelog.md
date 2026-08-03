@@ -28,6 +28,17 @@ Use this template:
 - **Validation**: ...
 ```
 
+## DEV-0007 — 2026-08-03 22:46 +08:00 — Make workspace path portable
+
+- **Area**: Remote development documentation.
+- **Summary**: Replaced the host-specific development-documentation path with
+  the repository-relative `dev/` path so the instructions remain portable when
+  the workspace moves.
+- **Documentation**: Updated `AGENTS.md` and recorded the relative-path policy
+  in this changelog.
+- **Validation**: Ran `git diff --check` and verified that `AGENTS.md` contains
+  no absolute shared-storage path.
+
 ## DEV-0006 — 2026-08-03 20:07 +08:00 — Complete Edge LIBERO training and export
 
 - **Area**: Cosmos3-Edge LIBERO training, qualitative visualization, model

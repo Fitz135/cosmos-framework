@@ -50,8 +50,8 @@ A `justfile` is provided at the root with longer recipes (`just install`, `just 
 - Every code or feature update must also update the corresponding user,
   developer, setup, or architecture documentation in the same commit. Keep
   examples and commands synchronized with the implementation.
-- Store all development-process documentation under [`dev/`](./dev/) (absolute
-  path: `/mnt/shared-storage-gpfs2/intern-pretrain-shared02/lutianyi/project/cosmos-framework/dev`).
+- Store all development-process documentation under [`dev/`](./dev/), relative
+  to the repository root.
   This includes development plans, design notes, implementation records,
   experiment notes, review notes, and changelogs. Do not create these documents
   elsewhere in the repository. Root instruction files such as `AGENTS.md` and
