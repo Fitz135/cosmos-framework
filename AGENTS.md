@@ -57,6 +57,13 @@ A `justfile` is provided at the root with longer recipes (`just install`, `just 
   elsewhere in the repository. Root instruction files such as `AGENTS.md` and
   established user-facing or upstream documentation keep their required
   locations and must still be updated in place when affected.
+- Store all experiment outputs under
+  `/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/output`. This is the
+  single output root for training and inference runs, checkpoints, logs,
+  offline W&B data, exported models, visualizations, evaluation artifacts, and
+  other generated experiment files. Create per-project and per-run
+  subdirectories below it; do not write generated experiment outputs into the
+  repository or another shared-storage location.
 - Assign every completed change a monotonically increasing identifier in the
   form `DEV-NNNN`. Determine the next identifier from the highest existing entry
   in [`dev/changelog.md`](./dev/changelog.md); never reuse or renumber an ID.

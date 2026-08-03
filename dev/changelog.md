@@ -28,6 +28,19 @@ Use this template:
 - **Validation**: ...
 ```
 
+## DEV-0008 — 2026-08-03 23:24 +08:00 — Centralize experiment outputs
+
+- **Area**: Remote experiment storage policy.
+- **Summary**: Required every generated training, inference, checkpoint, log,
+  offline W&B, export, visualization, and evaluation artifact to use
+  `/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/output` as its single
+  output root, with per-project and per-run subdirectories.
+- **Documentation**: Updated `AGENTS.md` and recorded the experiment-output
+  location policy in this changelog.
+- **Validation**: Ran `git diff --check`, verified the exact output root in
+  `AGENTS.md`, and confirmed that the focused commit contains only the root
+  instructions and this changelog entry.
+
 ## DEV-0007 — 2026-08-03 22:46 +08:00 — Make workspace path portable
 
 - **Area**: Remote development documentation.
