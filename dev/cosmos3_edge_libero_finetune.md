@@ -433,3 +433,42 @@ rjob submit \
   future H200 run, use the CUDA 12.8 dependency group and record both a
   successful `flash_attn_3_nv` import and the selected backend in the job log;
   setting `I4_ATTN_BACKENDS=flash3` provides a fail-fast enforcement check.
+
+### DEV-0010
+
+- The Edge LIBERO launcher now overwrites `I4_ATTN_BACKENDS` with the exact
+  allow-list `flash3`; an inherited value cannot restore cuDNN, NATTEN, or FA2
+  fallback.
+- Added a recipe prelaunch hook and a dedicated CUDA check that verifies SM90,
+  imports the ABI-matched `flash-attn-3-nv`, confirms that Cosmos filters the
+  backend list to only `flash3`, selects that backend for a representative
+  bfloat16 training shape, and executes finite forward and backward kernels.
+  Any failure exits before `torchrun`, model loading, or checkpoint I/O.
+- The persistent development `.venv` remains Torch 2.13/CUDA 13.0 and is not a
+  valid FA3 training environment. GPU validation therefore uses an isolated
+  node-local Torch 2.10 environment resolved from the repository's locked CUDA
+  dependency group; it does not create a second repository `.venv`.
+- H-cluster migration validation established that scheduled jobs must use the
+  `evoagi_gpu` charged group and explicitly mount the new GPFS workspace. The
+  first two submissions were rejected before job creation by obsolete/default
+  charged groups. Preflight `r3` then exposed the missing workspace mount;
+  `r4` exposed compute-node package-index timeouts; `r5` showed that offline
+  resolution could not discover the cached Torch wheel; `r6` exposed a missing
+  NVSHMEM runtime; and `r7` exposed the image's older NCCL symbol set. These
+  were environment-only diagnostics and did not start training.
+- `cosmos3-edge-libero-fa3-preflight-r8` succeeded on one NVIDIA H200
+  (`gpu-lg-cmc-h-h200-0120`) using the locked Torch 2.10.0+cu128 and
+  `flash-attn-3-nv` 1.0.3 packages plus their CUDA 12.8 runtime libraries. The
+  check constrained Cosmos to `backend=flash3`, selected it for bfloat16
+  training tensors, and executed finite forward and backward kernels on SM90.
+  The exact terminal evidence is: `Flash Attention 3 preflight passed:
+  backend=flash3, package=1.0.3, torch=2.10.0+cu128, cuda=12.8, device=NVIDIA
+  H200, sm=90.`
+- The persistent evidence log is
+  `/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/output/cosmos-framework/flash3-preflight/DEV-0010/preflight.log`.
+  The validated wheel SHA-256 values are
+  `7b4bd23ed63de97456fcc81c26fea9f02ee02ce1112111c4dac0d8cfe574b23e`
+  for Torch and
+  `ed7b3cf08ffacdeadfaa44ee674a3a5e67e7011829e0e757eb6f3463fb8d443e`
+  for Flash Attention 3. The node-local validation environment was ephemeral;
+  no second repository `.venv` was retained.

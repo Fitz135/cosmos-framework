@@ -122,6 +122,28 @@ export COSMOS3_EDGE_PROCESSOR_PATH=/path/to/Cosmos3-Edge-hf
 bash examples/launch_sft_action_policy_libero_all_edge_10fps.sh  # FSDP8, one node
 ```
 
+The Edge launcher requires Flash Attention 3 and deliberately provides no
+attention fallback. It overwrites `I4_ATTN_BACKENDS` with the `flash3`
+allow-list, then executes a small bfloat16 FA3 forward/backward kernel before
+starting `torchrun`. The launch stops before model loading unless all of the
+following hold:
+
+- the worker uses an SM90 Hopper GPU (H100 or H200);
+- `flash-attn-3-nv>=1.0.3` matches the active Torch/CUDA ABI;
+- Cosmos resolves `flash3` as the only allowed and compatible backend; and
+- the test kernel produces finite outputs and gradients.
+
+The repository's `cu128-train` and `cu130-train` dependency groups provide
+Torch 2.10-compatible FA3 builds. Do not use the `cu130-torch213` group for this
+recipe because it does not currently declare a Torch 2.13 FA3 wheel. A manual
+launch that bypasses the wrapper must reproduce its enforcement before
+`torchrun`:
+
+```bash
+export I4_ATTN_BACKENDS=flash3
+python -m cosmos_framework.scripts.check_flash_attention_3
+```
+
 The Nano recipes set lr 5e-5, warmup 500, cycle 16000, `save_iter=500`, HSDP 2x8 (global
 batch 2048 = `max_samples_per_batch` 128 × 16 ranks × grad_accum 1). They differ only in
 `max_iter`: **2000** for libero_10-only (peaks ~iter 1500), **5000** for libero-all

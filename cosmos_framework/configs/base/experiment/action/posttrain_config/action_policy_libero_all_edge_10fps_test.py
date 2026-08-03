@@ -18,6 +18,10 @@ RECIPE_PATH = Path(__file__).with_name("action_policy_libero_all_edge_10fps.py")
 RECIPE_SOURCE = RECIPE_PATH.read_text()
 RECIPE_TREE = ast.parse(RECIPE_SOURCE)
 BASE_CONFIG_SOURCE = (REPO_ROOT / "cosmos_framework/configs/base/config.py").read_text()
+LAUNCHER_SOURCE = (REPO_ROOT / "examples/launch_sft_action_policy_libero_all_edge_10fps.sh").read_text()
+COMMON_LAUNCHER_SOURCE = (REPO_ROOT / "examples/_sft_launcher_common.sh").read_text()
+FLASH3_PREFLIGHT_SOURCE = (REPO_ROOT / "cosmos_framework/scripts/check_flash_attention_3.py").read_text()
+FLASH3_PREFLIGHT_TREE = ast.parse(FLASH3_PREFLIGHT_SOURCE)
 
 
 def _named_call(name: str) -> ast.Call:
@@ -123,3 +127,20 @@ def test_edge_toml_defines_fsdp8_global_batch_2048() -> None:
     callback = _named_call("EveryNDrawSample")
     assert _literal_keyword(callback, "every_n") == recipe["checkpoint"]["save_iter"]
     assert 128 * 8 * recipe["trainer"]["grad_accum_iter"] == 2048
+
+
+def test_edge_launcher_forces_flash_attention_3_with_kernel_preflight() -> None:
+    assert 'export I4_ATTN_BACKENDS="flash3"' in LAUNCHER_SOURCE
+    assert "EXTRA_PRELAUNCH_CHECK='" in LAUNCHER_SOURCE
+    assert "python -m cosmos_framework.scripts.check_flash_attention_3" in LAUNCHER_SOURCE
+    assert 'eval "$EXTRA_PRELAUNCH_CHECK"' in COMMON_LAUNCHER_SOURCE
+    assert "training was not started" in COMMON_LAUNCHER_SOURCE
+
+    calls = {
+        node.func.attr
+        for node in ast.walk(FLASH3_PREFLIGHT_TREE)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+    assert {"get_device_capability", "synchronize", "backward"} <= calls
+    assert "filtered_backends == [FORCED_BACKEND]" in FLASH3_PREFLIGHT_SOURCE
+    assert "selected_backend == FORCED_BACKEND" in FLASH3_PREFLIGHT_SOURCE

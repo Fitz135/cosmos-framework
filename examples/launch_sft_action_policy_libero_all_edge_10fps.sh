@@ -12,6 +12,8 @@
 #   COSMOS3_EDGE_PROCESSOR_PATH
 #                         local Edge HF snapshot for offline startup
 #   OUTPUT_ROOT           default: outputs/train
+#   I4_ATTN_BACKENDS      ignored: this launcher always forces the value to
+#                         flash3 and fails before training if FA3 is unavailable
 #   EXTRA_TAIL_OVERRIDES  space-separated Hydra overrides for smoke/OOM tuning
 #
 # Default topology: one node, 8 ranks, FSDP8. The recipe uses 128 samples per
@@ -24,6 +26,12 @@ TOML_FILE="examples/toml/sft_config/action_policy_libero_all_edge_10fps.toml"
 : "${BASE_CHECKPOINT_PATH:=examples/checkpoints/Cosmos3-Edge}"
 
 export LIBERO_ROOT="${LIBERO_ROOT:-}"
+
+# This recipe intentionally has no attention-backend fallback. The preflight
+# executes an FA3 forward/backward kernel before torchrun starts.
+export I4_ATTN_BACKENDS="flash3"
+EXTRA_PRELAUNCH_CHECK='
+PYTHONPATH=. python -m cosmos_framework.scripts.check_flash_attention_3'
 
 EXTRA_DATASET_CHECK='
 [[ -n "$LIBERO_ROOT" ]] || {

@@ -28,6 +28,20 @@ Use this template:
 - **Validation**: ...
 ```
 
+## DEV-0010 — 2026-08-04 01:37 +08:00 — Force Flash Attention 3 for Edge LIBERO
+
+- **Area**: Cosmos3-Edge LIBERO training launcher and attention-backend
+  validation.
+- **Summary**: Forced the Edge recipe to use only Flash Attention 3 and added a
+  fail-fast GPU preflight that proves SM90 support, package compatibility,
+  backend selection, and finite FA3 forward/backward kernels before training.
+- **Documentation**: Updated the public LIBERO training guide with the strict
+  FA3 requirements and recorded the complete H200 job and environment evidence
+  in the development document.
+- **Validation**: Ran Ruff, format, focused pytest, shell syntax, and diff
+  checks; `cosmos3-edge-libero-fa3-preflight-r8` also passed the real kernel
+  check on an NVIDIA H200 with Torch 2.10.0+cu128 and CUDA 12.8.
+
 ## DEV-0009 — 2026-08-03 23:41 +08:00 — Reduce Edge checkpoint frequency
 
 - **Area**: Cosmos3-Edge LIBERO checkpointing, qualitative visualization, and

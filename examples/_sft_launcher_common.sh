@@ -16,6 +16,8 @@
 #                        Setting it also enables WAN_VAE_PATH plumbing + check.
 #   WAN_VAE_PATH         override the default examples/checkpoints/wan22_vae/Wan2.2_VAE.pth.
 #   EXTRA_DATASET_CHECK  bash snippet (string) eval'd after the default checks.
+#   EXTRA_PRELAUNCH_CHECK bash snippet (string) eval'd from the repository root
+#                        after input checks and before torchrun.
 #   TAIL_OVERRIDES       bash array of Hydra CLI overrides appended after `--`
 #                        (e.g. data_setting.max_tokens=16000 for VLM smokes).
 #   MASTER_PORT          torchrun --master_port; default 50012.
@@ -81,6 +83,14 @@ echo ">>> $(date '+%H:%M:%S') log:        $LOG_FILE"
 
 # Default empty if caller didn't set; safe under set -u.
 [[ ${TAIL_OVERRIDES+x} ]] || TAIL_OVERRIDES=()
+
+if [[ -n "${EXTRA_PRELAUNCH_CHECK:-}" ]]; then
+    echo ">>> $(date '+%H:%M:%S') Running recipe prelaunch check..."
+    if ! eval "$EXTRA_PRELAUNCH_CHECK"; then
+        echo "ERROR: recipe prelaunch check failed; training was not started." >&2
+        exit 1
+    fi
+fi
 
 TRAILING_ARGS=()
 if (( ${#TAIL_OVERRIDES[@]} > 0 )); then
