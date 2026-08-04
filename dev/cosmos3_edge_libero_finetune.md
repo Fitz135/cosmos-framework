@@ -4,7 +4,9 @@
 
 - Branch: `feature/cosmos3-edge-libero`
 - Base branch: `main`
-- Current phase: DEV-0006 complete
+- Current phase: DEV-0011 10k resume queued
+- Active 10k rjob: `cosmos3-edge-libero-10k-b128-fa3-r2` (waiting for a
+  matching 8×H200 node at submission time)
 - Full training: `cosmos3-edge-libero-full-b128-2361150` succeeded at
   iteration 5000
 - Final DCP: `iter_000005000` (30 GiB on GPFS)
@@ -472,3 +474,44 @@ rjob submit \
   `ed7b3cf08ffacdeadfaa44ee674a3a5e67e7011829e0e757eb6f3463fb8d443e`
   for Flash Attention 3. The node-local validation environment was ephemeral;
   no second repository `.venv` was retained.
+
+### DEV-0011
+
+- Scheduled a continuation from the migrated 30 GiB `iter_000005000` DCP to a
+  total `trainer.max_iter=10000`, retaining batch/accumulation `128/2`, global
+  batch 2048, LR `5e-5`, warmup 500, FSDP8, W&B offline, and forced FA3. The
+  resume override sets `checkpoint.load_training_state=true`, so model, EMA,
+  optimizer, scheduler, trainer, and RNG state continue from iteration 5000.
+- All inputs are now available under the migrated GPFS1 workspace: the merged
+  LIBERO dataset, Edge DCP/HF processor, Wan VAE, and final iteration-5000
+  checkpoint. The new run writes only below
+  `/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/output/cosmos-framework-training/cosmos3-edge-libero-10k-b128-fa3`.
+  With `save_iter=2000`, expected checkpoints and EMA rollout videos are at
+  iterations 6000, 8000, and 10000.
+- The persistent repository `.venv` remains Torch 2.13/CUDA 13.0. A direct
+  full sync to CUDA 12.8 was stopped before installation because unpacking the
+  CUDA libraries into GPFS was unacceptably slow. The job instead creates one
+  ephemeral node-local runtime from the repository's complete locked uv cache,
+  while keeping only one persistent repository `.venv`. The runtime uses an
+  immutable code export from commit `b97f5840afd9b19c762b5548537e0c30e0f395c0`.
+- The launch wrapper is an experiment artifact at
+  `/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/output/cosmos-framework-training/jobs/cosmos3-edge-libero-10k-b128-fa3/launch.sh`
+  with SHA-256
+  `3aac9cbdf298a1cbb703d1fe4f1ccf425199c8cde82ed78e8f9dfa49014fde14`.
+  It validates migrated inputs, constructs the node-local environment, forces
+  `I4_ATTN_BACKENDS=flash3`, runs the real FA3 preflight, and only then starts
+  eight-rank `torch.distributed.run`.
+- `cosmos3-edge-libero-10k-fa3-preflight` failed before environment setup
+  because the container lacks `git-lfs`; no training or CUDA kernel ran. The
+  wrapper now disables the LFS filter when exporting the pinned code commit.
+  `cosmos3-edge-libero-10k-fa3-preflight-r2` then succeeded on H200 node 0119:
+  Torch `2.10.0+cu128`, CUDA 12.8, torchvision `0.25.0+cu128`, and
+  `flash-attn-3-nv` `1.0.3+cu128.torch210`; the forced FA3 forward/backward
+  kernel passed on SM90.
+- The first formal submission, `cosmos3-edge-libero-10k-b128-fa3`, requested
+  120 CPUs and was stopped while still pending because all 15 matching nodes
+  reported insufficient free CPU. `cosmos3-edge-libero-10k-b128-fa3-r2` keeps
+  8 H200s, 1,800,000 MiB memory, host networking/shared memory, gang start, and
+  RDMA resources while reducing CPU to 96. It was submitted at 2026-08-04
+  14:21 +08:00 and remained queued for a matching node at handoff. The durable
+  combined bootstrap/training log is `logs/full.log` under the run root above.

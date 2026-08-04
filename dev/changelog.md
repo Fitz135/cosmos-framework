@@ -28,6 +28,19 @@ Use this template:
 - **Validation**: ...
 ```
 
+## DEV-0011 — 2026-08-04 14:22 +08:00 — Schedule 10k Edge LIBERO continuation
+
+- **Area**: Cosmos3-Edge LIBERO cluster training and migrated runtime setup.
+- **Summary**: Scheduled an 8×H200 continuation from iteration 5000 to 10000
+  with forced Flash Attention 3, batch/accumulation 128/2, 2000-step
+  checkpoints, and all new outputs under the required GPFS1 output root.
+- **Documentation**: Recorded migrated input paths, immutable code/runtime
+  staging, preflight evidence, resource configuration, job history, output
+  paths, and queued status in the full development record.
+- **Validation**: Checked the launch wrapper with `bash -n`; H200 preflight job
+  `cosmos3-edge-libero-10k-fa3-preflight-r2` proved Torch 2.10/CUDA 12.8 and
+  finite forced-FA3 forward/backward kernels before the formal submission.
+
 ## DEV-0010 — 2026-08-04 01:37 +08:00 — Force Flash Attention 3 for Edge LIBERO
 
 - **Area**: Cosmos3-Edge LIBERO training launcher and attention-backend
