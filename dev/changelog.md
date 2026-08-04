@@ -28,6 +28,20 @@ Use this template:
 - **Validation**: ...
 ```
 
+## DEV-0013 — 2026-08-04 16:12 +08:00 — Resubmit 10k Edge LIBERO training
+
+- **Area**: Cosmos3-Edge LIBERO H200 training orchestration.
+- **Summary**: Pinned the training wrapper to the container-aware affinity
+  commit and resubmitted the 8×H200 continuation from iteration 5000 to 10000
+  with forced Flash Attention 3 and the validated 96-CPU resource profile.
+- **Documentation**: Recorded the immutable code commit, launch-wrapper hash,
+  exact resource allocation, new rjob and replica IDs, submission state, and
+  durable evidence location in the complete LIBERO development record.
+- **Validation**: The external launch wrapper passed `bash -n`; its immutable
+  commit, forced-FA3 environment, max iteration, and full-state resume options
+  were checked; `rjob get cosmos3-edge-libero-10k-b128-fa3-r3` confirmed the
+  submitted replica in `STARTING`/in-queue state; `git diff --check` passed.
+
 ## DEV-0012 — 2026-08-04 16:03 +08:00 — Make CPU affinity container-aware
 
 - **Area**: Distributed initialization and Cosmos3-Edge LIBERO cluster

@@ -4,9 +4,11 @@
 
 - Branch: `feature/cosmos3-edge-libero`
 - Base branch: `main`
-- Current phase: DEV-0012 container CPU-affinity fix
+- Current phase: DEV-0013 10k retry submitted
+- Active 10k rjob: `cosmos3-edge-libero-10k-b128-fa3-r3` (`STARTING`/in
+  queue at submission-time verification)
 - Failed 10k rjob: `cosmos3-edge-libero-10k-b128-fa3-r2` (failed before
-  process-group initialization; retry pending)
+  process-group initialization)
 - Full training: `cosmos3-edge-libero-full-b128-2361150` succeeded at
   iteration 5000
 - Final DCP: `iter_000005000` (30 GiB on GPFS)
@@ -537,3 +539,22 @@ rjob submit \
 - Focused regression tests cover a partially overlapping cpuset, disjoint CPU
   sets, and the original `OSError` path. The generic container failure mode and
   behavior are also documented in `docs/faq.md`.
+
+### DEV-0013
+
+- Updated the external launch wrapper to export immutable code commit
+  `fd013090dcef551b41a1b131434d1f4cf961a1aa`, which contains the
+  container-aware CPU-affinity fix. The updated wrapper SHA-256 is
+  `b9aea0daa90f1825d2c919e3733f3e5bf9005e720291b94d4a480f68e2cca35a`;
+  `bash -n` passed and its forced `I4_ATTN_BACKENDS=flash3`, max iteration
+  10000, and full training-state resume overrides were rechecked.
+- Submitted `cosmos3-edge-libero-10k-b128-fa3-r3` at 2026-08-04 16:11
+  +08:00 with the validated configuration: one private node, 8 H200s, 96 CPU
+  cores, 1,800,000 MiB memory, host networking/shared memory, gang start,
+  eight shared RDMA devices, one Mellanox RDMA device, `brainpp.cn/fuse=1`,
+  the `evoagi_gpu` charged group, and the explicit GPFS1 VTLA mount.
+- Submission-time `rjob get` reported replica
+  `cosmos3-edge-libero-10k-b128-fa3-r3-cfcd2` as `STARTING` while the job was
+  in queue. Training has not started yet; the job will append environment,
+  FA3 preflight, resume, iteration, loss, checkpoint, and visualization
+  evidence to the existing durable `logs/full.log` under the run root.
