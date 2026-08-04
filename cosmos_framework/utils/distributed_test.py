@@ -22,18 +22,64 @@ def test_init_uses_gloo_backend_for_cpu(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(distributed.dist, "is_initialized", lambda: False)
     monkeypatch.setattr(distributed.dist, "is_available", lambda: True)
     monkeypatch.setattr(distributed.dist, "init_process_group", init_process_group)
+    monkeypatch.setattr(distributed, "_set_device_affinity", lambda _local_rank: None)
+    monkeypatch.setattr(distributed.torch.cuda, "set_device", lambda _local_rank: None)
+
+    distributed.init()
+
+    assert init_process_group.call_args.kwargs["backend"] == "gloo"
+
+
+def test_set_device_affinity_intersects_with_allowed_cpus(monkeypatch: pytest.MonkeyPatch) -> None:
+    set_affinity = Mock()
+    monkeypatch.setattr(distributed.pynvml, "nvmlInit", lambda: None)
+    monkeypatch.setattr(
+        distributed,
+        "Device",
+        lambda _local_rank: SimpleNamespace(get_cpu_affinity=lambda: [0, 2, 5]),
+    )
+    monkeypatch.setattr(distributed.os, "sched_getaffinity", lambda _pid: {2, 3})
+    monkeypatch.setattr(distributed.os, "sched_setaffinity", set_affinity)
+
+    distributed._set_device_affinity(0)
+
+    set_affinity.assert_called_once_with(0, {2})
+
+
+def test_set_device_affinity_skips_disjoint_cpu_sets(monkeypatch: pytest.MonkeyPatch) -> None:
+    set_affinity = Mock()
+    warning = Mock()
+    monkeypatch.setattr(distributed.pynvml, "nvmlInit", lambda: None)
+    monkeypatch.setattr(
+        distributed,
+        "Device",
+        lambda _local_rank: SimpleNamespace(get_cpu_affinity=lambda: [0, 1]),
+    )
+    monkeypatch.setattr(distributed.os, "sched_getaffinity", lambda _pid: {2, 3})
+    monkeypatch.setattr(distributed.os, "sched_setaffinity", set_affinity)
+    monkeypatch.setattr(distributed.log, "warning", warning)
+
+    distributed._set_device_affinity(0)
+
+    set_affinity.assert_not_called()
+    warning.assert_called_once()
+
+
+def test_set_device_affinity_handles_oserror(monkeypatch: pytest.MonkeyPatch) -> None:
+    warning = Mock()
     monkeypatch.setattr(distributed.pynvml, "nvmlInit", lambda: None)
     monkeypatch.setattr(
         distributed,
         "Device",
         lambda _local_rank: SimpleNamespace(get_cpu_affinity=lambda: [0]),
     )
-    monkeypatch.setattr(distributed.os, "sched_setaffinity", lambda _pid, _affinity: None)
-    monkeypatch.setattr(distributed.torch.cuda, "set_device", lambda _local_rank: None)
+    monkeypatch.setattr(distributed.os, "sched_getaffinity", lambda _pid: {0})
+    monkeypatch.setattr(distributed.os, "sched_setaffinity", Mock(side_effect=OSError(22, "Invalid argument")))
+    monkeypatch.setattr(distributed.log, "warning", warning)
 
-    distributed.init()
+    distributed._set_device_affinity(0)
 
-    assert init_process_group.call_args.kwargs["backend"] == "gloo"
+    warning.assert_called_once()
 
 
 def _contains_tensor(value: Any) -> bool:

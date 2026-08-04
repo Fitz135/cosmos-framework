@@ -28,6 +28,22 @@ Use this template:
 - **Validation**: ...
 ```
 
+## DEV-0012 — 2026-08-04 16:03 +08:00 — Make CPU affinity container-aware
+
+- **Area**: Distributed initialization and Cosmos3-Edge LIBERO cluster
+  training.
+- **Summary**: Intersected NVML's GPU-local host CPU set with the current
+  process's allowed container cpuset, made empty intersections and OS affinity
+  errors non-fatal, and added regressions for the failure that stopped the
+  first formal 10k continuation before process-group initialization.
+- **Documentation**: Added generic container-affinity troubleshooting to the
+  FAQ and recorded the failed rjob, successful forced-FA3 preflight, root
+  cause, absence of new checkpoints, and retry requirement in the complete
+  LIBERO development record.
+- **Validation**: Ruff and format checks passed; all 11 tests in
+  `cosmos_framework/utils/distributed_test.py` passed; `git diff --check`
+  passed.
+
 ## DEV-0011 — 2026-08-04 14:22 +08:00 — Schedule 10k Edge LIBERO continuation
 
 - **Area**: Cosmos3-Edge LIBERO cluster training and migrated runtime setup.

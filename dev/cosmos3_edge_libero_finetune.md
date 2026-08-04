@@ -4,9 +4,9 @@
 
 - Branch: `feature/cosmos3-edge-libero`
 - Base branch: `main`
-- Current phase: DEV-0011 10k resume queued
-- Active 10k rjob: `cosmos3-edge-libero-10k-b128-fa3-r2` (waiting for a
-  matching 8×H200 node at submission time)
+- Current phase: DEV-0012 container CPU-affinity fix
+- Failed 10k rjob: `cosmos3-edge-libero-10k-b128-fa3-r2` (failed before
+  process-group initialization; retry pending)
 - Full training: `cosmos3-edge-libero-full-b128-2361150` succeeded at
   iteration 5000
 - Final DCP: `iter_000005000` (30 GiB on GPFS)
@@ -515,3 +515,25 @@ rjob submit \
   RDMA resources while reducing CPU to 96. It was submitted at 2026-08-04
   14:21 +08:00 and remained queued for a matching node at handoff. The durable
   combined bootstrap/training log is `logs/full.log` under the run root above.
+
+### DEV-0012
+
+- `cosmos3-edge-libero-10k-b128-fa3-r2` reached H200 node
+  `gpu-lg-cmc-h-h200-0905.host.h.pjlab.org.cn`. Its formal-run preflight passed
+  with Torch `2.10.0+cu128`, CUDA 12.8, `flash-attn-3-nv`
+  `1.0.3+cu128.torch210`, H200 SM90, forced `backend=flash3`, and finite
+  forward/backward kernels.
+- All eight ranks then entered `distributed.init()`, but ranks failed at
+  `os.sched_setaffinity(0, device.get_cpu_affinity())` with
+  `OSError: [Errno 22] Invalid argument`. The failure occurred before process
+  group initialization, checkpoint loading, model/data loading, or any
+  training iteration and produced no new checkpoint.
+- NVML reports CPUs using the host topology, while the rjob container may
+  restrict the process to a different Kubernetes cpuset. The old code passed
+  the host CPU IDs directly to `sched_setaffinity` and caught only NVML
+  exceptions. The fix intersects the NVML set with `os.sched_getaffinity(0)`,
+  skips manual binding when the intersection is empty, and treats an OS-level
+  rejection as a non-fatal warning.
+- Focused regression tests cover a partially overlapping cpuset, disjoint CPU
+  sets, and the original `OSError` path. The generic container failure mode and
+  behavior are also documented in `docs/faq.md`.

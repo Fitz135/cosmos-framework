@@ -274,6 +274,21 @@ See [docs/training.md](./training.md) for the full SFT setup and TOML reference 
 
 ---
 
+### Q: Distributed training fails in `sched_setaffinity` with `OSError: [Errno 22] Invalid argument`
+
+GPU topology APIs may report host CPU IDs that are not available inside a
+container's restricted CPU set. Cosmos intersects the GPU-local CPU set with
+the CPUs allowed for the current process before applying affinity. If the sets
+do not overlap, or the operating system rejects the affinity request, Cosmos
+logs a warning and continues without manual CPU pinning.
+
+If an older checkout fails before process-group initialization, update to a
+revision containing this container-aware affinity handling. Changing the GPU
+attention backend, checkpoint, or training batch size does not address this
+CPU-set mismatch.
+
+---
+
 ## Tips and Tricks
 
 ### Seed reproducibility

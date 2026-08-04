@@ -19,8 +19,8 @@ import torch
 import torch.distributed as dist
 from torch.distributed import get_process_group_ranks
 
-from cosmos_framework.utils.flags import INTERNAL
 from cosmos_framework.utils.device import Device
+from cosmos_framework.utils.flags import INTERNAL
 
 if dist.is_available():
     from torch.distributed.distributed_c10d import _get_default_group
@@ -32,19 +32,33 @@ if TYPE_CHECKING:
     from cosmos_framework.utils.config import DDPConfig
 
 
+def _set_device_affinity(local_rank: int) -> None:
+    """Pin this process to GPU-local CPUs allowed by its container."""
+    try:
+        pynvml.nvmlInit()
+        device = Device(local_rank)
+        device_affinity = set(device.get_cpu_affinity())
+        allowed_affinity = os.sched_getaffinity(0)
+        affinity = device_affinity.intersection(allowed_affinity)
+        if not affinity:
+            log.warning(
+                "Skipping device affinity because the GPU-local CPU set does not overlap "
+                "this process's allowed CPU set."
+            )
+            return
+        os.sched_setaffinity(0, affinity)
+    except (pynvml.NVMLError, OSError) as e:
+        log.warning(f"Failed to set device affinity: {e}")
+
+
 def init() -> int | None:
     """Initialize distributed training."""
     if dist.is_initialized():
         return torch.cuda.current_device()
 
     # Set GPU affinity.
-    pynvml.nvmlInit()
     local_rank = int(os.getenv("LOCAL_RANK", 0))
-    try:
-        device = Device(local_rank)
-        os.sched_setaffinity(0, device.get_cpu_affinity())
-    except pynvml.NVMLError as e:
-        log.warning(f"Failed to set device affinity: {e}")
+    _set_device_affinity(local_rank)
     # Set up distributed communication. CPU checkpoint conversion needs Gloo
     # because NCCL cannot synchronize CPU-resident tokenizer or model tensors.
     os.environ["TORCH_NCCL_BLOCKING_WAIT"] = "0"
