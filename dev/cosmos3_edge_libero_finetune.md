@@ -4,9 +4,10 @@
 
 - Branch: `feature/cosmos3-edge-libero`
 - Base branch: `main`
-- Current phase: DEV-0013 10k retry submitted
-- Active 10k rjob: `cosmos3-edge-libero-10k-b128-fa3-r3` (`STARTING`/in
-  queue at submission-time verification)
+- Current phase: DEV-0014 explicit-stop investigation and retry
+- Active 10k rjob: `cosmos3-edge-libero-10k-b128-fa3-r4` (running)
+- Stopped 10k rjob: `cosmos3-edge-libero-10k-b128-fa3-r3` (explicit
+  control-plane stop at iteration 5016; initiator unavailable)
 - Failed 10k rjob: `cosmos3-edge-libero-10k-b128-fa3-r2` (failed before
   process-group initialization)
 - Full training: `cosmos3-edge-libero-full-b128-2361150` succeeded at
@@ -558,3 +559,31 @@ rjob submit \
   in queue. Training has not started yet; the job will append environment,
   FA3 preflight, resume, iteration, loss, checkpoint, and visualization
   evidence to the existing durable `logs/full.log` under the run root.
+
+### DEV-0014
+
+- `cosmos3-edge-libero-10k-b128-fa3-r3` started at 2026-08-04 20:39:56
+  +08:00 on H200 node 0905. Forced-FA3 preflight passed, all eight NCCL ranks
+  initialized through the new empty-cpuset fallback, the iteration-5000 model,
+  optimizer, scheduler, trainer, and RNG state loaded, and training reached
+  iteration 5016 with rank-0 loss `0.8696` and approximately 21.5 seconds per
+  iteration.
+- At 20:47:40 +08:00, both the RJob and replica specs acquired the exact
+  `stopTimestamp=2026-08-04T12:47:40Z`; the pod then received SIGTERM and the
+  job entered `Stopped`. This rules out an application exception, GPU OOM,
+  preemption, and scheduler eviction: a client or API with namespace authority
+  explicitly invoked the stop path. The RJob events, status, annotations, and
+  CRD fields do not identify that caller, and the user confirmed they did not
+  issue the stop.
+- The termination callback observed SIGTERM at iteration 5016, but no
+  `iter_000005016` directory was created. The retry therefore resumes again
+  from the last complete `iter_000005000` checkpoint.
+- Submitted `cosmos3-edge-libero-10k-b128-fa3-r4` at 20:52 +08:00 with the
+  unchanged immutable code, wrapper, H200 resources, forced-FA3 environment,
+  and full-state resume configuration. It scheduled immediately on node 0905;
+  FA3 preflight passed again and all eight ranks initialized with NCCL by
+  20:53:14. No code or training configuration change was required.
+- The recurring monitor `monitor-cosmos3-edge-libero-10k-r4` now treats `r4`
+  as the active job and must only inspect state and evidence. It must not stop,
+  delete, patch, or resubmit cluster resources without explicit user
+  authorization.

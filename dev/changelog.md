@@ -28,6 +28,22 @@ Use this template:
 - **Validation**: ...
 ```
 
+## DEV-0014 — 2026-08-04 20:54 +08:00 — Recover from explicit rjob stop
+
+- **Area**: Cosmos3-Edge LIBERO H200 training operations.
+- **Summary**: Established that the healthy `r3` run was explicitly stopped
+  through the RJob control plane at iteration 5016, verified that no new
+  checkpoint survived, and resubmitted the unchanged full-state continuation
+  as `cosmos3-edge-libero-10k-b128-fa3-r4`.
+- **Documentation**: Recorded forced-FA3, distributed initialization, resume,
+  throughput/loss, the exact stop timestamp and evidence boundary, missing
+  termination checkpoint, new job/replica, and monitoring constraints in the
+  complete LIBERO development record.
+- **Validation**: Inspected RJob and replica events plus raw CRD spec/status;
+  checked the durable log and output tree; `r4` scheduled on H200 node 0905,
+  passed forced-FA3 preflight, and initialized all eight NCCL ranks;
+  `git diff --check` passed.
+
 ## DEV-0013 — 2026-08-04 16:12 +08:00 — Resubmit 10k Edge LIBERO training
 
 - **Area**: Cosmos3-Edge LIBERO H200 training orchestration.
