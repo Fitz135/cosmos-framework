@@ -28,6 +28,27 @@ Use this template:
 - **Validation**: ...
 ```
 
+## DEV-0015 — 2026-08-18 05:27 +08:00 — Add strict Cosmos3-Edge LIBERO evaluation
+
+- **Area**: Cosmos3-Edge checkpoint identity, policy serving, LIBERO simulator
+  preflight, closed-loop evaluation, and durable artifacts.
+- **Summary**: Added fail-fast Edge policy profiles and checkpoint
+  fingerprints, a versioned server protocol, locked four-suite EGL preflight,
+  deterministic batched/resumable runner, and a single-checkpoint orchestrator
+  that validates handshakes, records sampling/provenance, and cleans up complete
+  process groups. The formal matrix separates base HF regular zero-shot from
+  the 5k and 10k fine-tuned HF EMA checkpoints.
+- **Documentation**: Replaced the Nano-oriented public eval instructions with
+  the strict preflight/job/runner workflow, retained the old client as Nano
+  legacy, and expanded the Edge development record with the three-checkpoint
+  matrix, 10k EMA export, locked assets/environment, canonical output,
+  promotion ladder, and PJLab mount examples.
+- **Validation**: Successfully resolved the three real checkpoint targets with
+  distinct immutable fingerprint/profile hashes; combined focused validation
+  passed 127 tests; Ruff lint and format checks passed; Pyrefly reported 0
+  errors; and the locked LIBERO/robosuite/MuJoCo EGL preflight passed all four
+  primary suites.
+
 ## DEV-0014 — 2026-08-04 20:54 +08:00 — Recover from explicit rjob stop
 
 - **Area**: Cosmos3-Edge LIBERO H200 training operations.

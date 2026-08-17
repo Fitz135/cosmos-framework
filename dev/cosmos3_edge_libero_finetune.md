@@ -2,19 +2,19 @@
 
 ## Status
 
-- Branch: `feature/cosmos3-edge-libero`
-- Base branch: `main`
-- Current phase: DEV-0014 explicit-stop investigation and retry
-- Active 10k rjob: `cosmos3-edge-libero-10k-b128-fa3-r4` (running)
-- Stopped 10k rjob: `cosmos3-edge-libero-10k-b128-fa3-r3` (explicit
-  control-plane stop at iteration 5016; initiator unavailable)
-- Failed 10k rjob: `cosmos3-edge-libero-10k-b128-fa3-r2` (failed before
-  process-group initialization)
-- Full training: `cosmos3-edge-libero-full-b128-2361150` succeeded at
-  iteration 5000
-- Final DCP: `iter_000005000` (30 GiB on GPFS)
-- Final HF/safetensors export: `export-final-iter5000` (7.3 GiB)
-- Final real-sample action check: finite `[1, 8, 10]` output
+- Branch: `feature_libero_finetune`
+- Base branch: `feature/cosmos3-edge-libero`
+- Current phase: DEV-0015 strict Cosmos3-Edge LIBERO evaluation.
+- Original 5k training: `cosmos3-edge-libero-full-b128-2361150` succeeded.
+- 10k continuation output: complete `iter_000010000/model` DCP under the
+  canonical output root.
+- Formal checkpoints: base Edge HF regular, 5k fine-tuned HF EMA, and 10k
+  fine-tuned HF EMA.
+- Locked simulator preflight: passed for the four primary suites.
+- Policy rollout status: smoke, pilot, and full evaluations are pending; no
+  success-rate claim is recorded yet.
+- Previous real-sample action check: finite `[1, 8, 10]` output from the 5k
+  export.
 
 ## Objective
 
@@ -225,6 +225,157 @@ rjob submit \
     PER_RANK_BATCH=128 GRAD_ACCUM=2 -- \
   bash /mnt/shared-storage-gpfs2/intern-pretrain-shared02/lutianyi/.cache/cosmos3_edge_libero_job.sh
 ```
+
+## Strict Cosmos3-Edge LIBERO evaluation (DEV-0015)
+
+### Runtime contract
+
+The strict Edge path is
+`cosmos_framework.evaluation.libero.preflight` →
+`cosmos_framework.evaluation.libero.job` →
+`cosmos_framework.evaluation.libero.runner`. The job resolves checkpoint
+identity locally, starts the CUDA policy server, requires the server's
+versioned `/info` profile and immutable checkpoint fingerprint to match,
+starts the runner with the separate LIBERO Python, and terminates complete
+server and runner process groups on success, error, KeyboardInterrupt, or
+SIGTERM.
+
+The committed adapter at
+`cosmos_framework/evaluation/libero/profiles/edge_libero_target_adapter.json`
+locks 10 FPS, chunk 8, 10D frame-wise-relative rot6d actions, native pose
+frame, `quantile_rot` stats SHA, JSON prompts, agentview+wrist at 256 pixels
+with rotation correction, OSC_POSE at 10 Hz, and `pm_one` gripper semantics.
+Sampling is separate and explicitly recorded with
+`--num-steps 8 --guidance 1.0`.
+
+### Formal checkpoint matrix
+
+| Target | Current PJLab path | Required flags and interpretation |
+| ------ | ------------------- | --------------------------------- |
+| Base Edge HF regular | `/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/model/Cosmos3-Edge-hf` | Adapter plus `--weights-variant regular`; base, explicit zero-shot diagnostic only. An explicit pinned load config may be supplied if the runtime needs one. |
+| 5k fine-tune HF EMA | `/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/model/cosmos3-edge-libero-all-10fps/export-final-iter5000` | Adapter plus `--weights-variant ema`; formal 5k fine-tuned target. |
+| 10k fine-tune HF EMA | `/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/output/cosmos-framework-eval/checkpoints/cosmos3-edge-libero-10k-ema` | Adapter plus `--weights-variant ema`; formal 10k fine-tuned target. |
+
+Both fine-tuned exports contain only their selected EMA weights. Their
+`checkpoint.json.policy` records training-native policy fields; the target
+adapter supplies the remaining evaluation semantics. HF fingerprints include
+safetensors, load-critical configuration and processor/tokenizer assets, plus
+an explicit external config when one is supplied.
+
+DCP remains a source/debug format rather than a formal comparison target. The
+10k source DCP is
+`/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/output/cosmos-framework-training/cosmos3-edge-libero-10k-b128-fa3/cosmos3_action_libero/action_sft/action_policy_libero_all_edge_10fps_10k/checkpoints/iter_000010000/model`;
+its resolved config is the sibling run's `config.yaml`. DCP evaluation
+requires that exact config, the adapter, and regular weights. Direct EMA DCP
+evaluation through YAML/JSON is rejected, which is why the formal 5k and 10k
+EMA targets are HF exports.
+
+### Resolved identity evidence
+
+The strict resolver successfully resolved all three real comparison targets on
+2026-08-18:
+
+| Target | Checkpoint fingerprint | Policy profile hash |
+| ------ | ---------------------- | ------------------- |
+| Base Edge HF regular | `dc99be118279d8b86c1697cfb7e03243c6bd683b1800d6ec051c653beee644af` | `adc9b91023b01829e7e7d6517ed433a5a7e51bd66c5bf072b6a65ecd4cf3832b` |
+| 5k fine-tune HF EMA | `05bd7a37317b1c078951d41fd2a88917aab3f7c563f9b81b777d4858f02656c4` | `4248de2aaf4a229a146b7303f270e51060f6509b5cd52f3dcf550f16e0623f01` |
+| 10k fine-tune HF EMA | `ca83c3545605e368c30a8a4a89188294d6b6f7ff6d85e73b11cfd8c1dc4a2921` | `b3284d55e4ec80e2ff4c4126b55be5cc75c66aa571509d1c5f1ee90d53c32783` |
+
+The 10k export's two top-level safetensor shards were corrected to mode
+`0644` by a root worker using the same evaluation image, so scheduled
+non-root readers can load the exact fingerprinted export.
+
+### Locked simulator and assets
+
+The repository-local simulator environment is
+`/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/project/cosmos-framework/.venv-libero`,
+resolved from `uv.lock` with the `libero` dependency group. Confirmed
+versions are LIBERO 0.1.1, robosuite 1.4.0, and MuJoCo 3.3.2. The
+425 MiB asset payload is stored separately at
+`/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/data/libero-assets` and
+exposed to LIBERO through the symlink
+`/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/project/cosmos-framework/.venv-libero/lib/python3.13/site-packages/libero/libero/assets`.
+That link targets the external data directory; the wheel does not bundle this
+asset payload. The BDDL files and init states remain in the installed LIBERO
+package. The
+non-interactive config is
+`/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/output/cosmos-framework-eval/runtime/libero-config/config.yaml`
+and points its asset entry at the package path above, which resolves through
+the symlink to the external asset directory.
+
+The confirmed manifest is
+`/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/output/cosmos-framework-eval/libero/preflight/20260818-cpu-egl-diagnostic-v7/preflight.json`.
+It records `status=passed`, `MUJOCO_GL=egl`, loaded `libEGL.so.1`, adapter
+and stats hashes, and successful task-0 rendering after 10 warmup steps for
+`libero_spatial`, `libero_object`, `libero_goal`, and `libero_10`.
+`libero_90` is outside this preflight guarantee.
+
+### Canonical output and promotion plan
+
+All evaluation artifacts remain below
+`/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/output`:
+
+```text
+output/cosmos-framework-eval/
+  checkpoints/cosmos3-edge-libero-10k-ema/
+  runtime/libero-config/config.yaml
+  libero/preflight/<run-id>/preflight.json
+  libero/runs/<checkpoint-id>/<smoke|pilot|full>/<suite>/
+```
+
+Each immutable run directory holds `manifest.json`, `episodes.jsonl`,
+`infra_errors.jsonl`, `metrics.json`, `_SUCCESS`, `job.log`,
+`server.log`, `runner.log`, and `server_runtime/`. Exact reruns resume by
+stable episode ID. Historical infrastructure attempts remain auditable after a
+successful retry; success requires evaluated terminal episodes and
+`overall.infra_errors=0`.
+
+Promotion remains pending:
+
+| Stage | Planned scope | Gate |
+| ----- | ------------- | ---- |
+| Smoke | each checkpoint, `libero_spatial` task 0, 1 trial, 1 env, 20 steps | Matching profile/fingerprint, finite `[8,10]` actions, terminal record, no infrastructure error. |
+| Pilot | each checkpoint, tasks 0 and 1 of one suite, 3 trials, 2 envs, canonical max steps | Stable resets/seeds, acceptable latency and memory, complete artifacts. |
+| Full | three HF checkpoints × four primary suites × 10 tasks × 50 trials, initially 8 envs | One sealed run per checkpoint/suite; aggregate only identical contracts. |
+
+Base metrics will be labeled zero-shot and never mixed with fine-tuned
+results. The 5k and 10k EMA results remain separate checkpoint fingerprints.
+
+### PJLab launch skeletons
+
+The current mount URI is
+`gpfs://gpfs1/evoagi-share/VTLA:/mnt/shared-storage-user/evoagi-share/VTLA`.
+One loopback policy-server/runner pair uses one replica and one GPU.
+
+```bash
+rlaunch \
+  --gpu=1 --cpu=16 --memory=131072 \
+  --charged-group=evoagi_gpu \
+  --positive-tags=feature/gpfs=yes \
+  --image=<EVAL_IMAGE> \
+  --custom-resources=brainpp.cn/fuse=1 \
+  --mount=gpfs://gpfs1/evoagi-share/VTLA:/mnt/shared-storage-user/evoagi-share/VTLA \
+  -- bash
+```
+
+```bash
+rjob submit \
+  --name <JOB_NAME> \
+  --charged-group evoagi_gpu \
+  --image <EVAL_IMAGE> \
+  --replica 1 --gpu 1 --cpu 16 --memory 131072 \
+  --positive-tags=feature/gpfs=yes \
+  --custom-resources=brainpp.cn/fuse=1 \
+  --mount=gpfs://gpfs1/evoagi-share/VTLA:/mnt/shared-storage-user/evoagi-share/VTLA \
+  --share-host-shm=True \
+  --env COSMOS_EVAL_IMAGE=<EVAL_IMAGE> COSMOS_EVAL_JOB_ID=<JOB_NAME> \
+  -- bash -lc '<source shared environment; export EGL and LIBERO variables; run preflight or job>'
+```
+
+The 16-CPU/128-GiB request is a pilot starting point for eight environments,
+not a measured minimum. The final image reference, scheduler ID, mount,
+package versions, resolved profile, checkpoint fingerprint, and sampling
+settings are persisted as provenance.
 
 ## Implementation log
 
@@ -587,3 +738,24 @@ rjob submit \
   as the active job and must only inspect state and evidence. It must not stop,
   delete, patch, or resubmit cluster resources without explicit user
   authorization.
+
+### DEV-0015
+
+- Added a strict, resumable Cosmos3-Edge LIBERO evaluation pipeline with
+  machine-readable EGL/simulator preflight, immutable checkpoint/profile
+  identity, versioned HTTP handshake, deterministic batched runner, canonical
+  artifacts, infrastructure-attempt retry, and a single-checkpoint job that
+  isolates and cleans up server/runner process groups.
+- Locked Edge target semantics in one adapter. The formal comparison is base
+  Edge HF regular versus the 5k and 10k fine-tuned HF EMA exports; DCP is
+  retained only as a regular-weight source/debug path.
+- Confirmed the locked LIBERO 0.1.1 / robosuite 1.4.0 / MuJoCo 3.3.2
+  environment and a four-primary-suite EGL preflight. Real policy smoke,
+  pilot, and full rollouts remain pending, so no success metric is claimed.
+- Updated the public guide and this operations record with the checkpoint
+  matrix, 10k export, environment/assets, canonical output and resume rules,
+  promotion gates, and PJLab launch/mount skeletons.
+- Combined focused validation passed 127 tests. Ruff lint and format checks
+  passed, and Pyrefly reported 0 errors. The strict resolver successfully
+  resolved all three real checkpoint profiles and fingerprints, and the locked
+  EGL preflight passed all four primary LIBERO suites.

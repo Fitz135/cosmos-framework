@@ -64,16 +64,26 @@ from PIL import Image
 # `projects.cosmos3.vfm.*` and are auto-rewritten to `cosmos3._src.vfm.*` by the
 # cosmos-framework release script.
 from cosmos_framework.data.generator.action.action_processing import (
+    ActionNormalizer,
     ActionProcessingRecord,
+    load_action_stats,
     make_batched_action_processing_fields,
+    resolve_action_normalization,
 )
 from cosmos_framework.data.generator.action.domain_utils import get_domain_id
-from cosmos_framework.data.generator.action.json_formatter import ActionPromptJsonFormatter
 from cosmos_framework.data.generator.action.transforms import (
     build_sequence_plan_from_mode,
     find_closest_target_size,
     reflection_pad_to_target,
     remove_reflection_padding,
+)
+from cosmos_framework.evaluation.libero.action import validate_action_chunk
+from cosmos_framework.evaluation.libero.checkpoint_profile import resolve_checkpoint_profile
+from cosmos_framework.evaluation.libero.prompt import build_libero_json_prompt
+from cosmos_framework.evaluation.libero.schema import (
+    CheckpointFormat,
+    LiberoCheckpointProfile,
+    WeightsVariant,
 )
 from cosmos_framework.inference.args import OmniSetupArgs, OmniSetupOverrides
 from cosmos_framework.inference.common.args import CheckpointOverrides, ConfigFileType, tyro_cli
@@ -87,8 +97,8 @@ from cosmos_framework.scripts.action_policy_server_utils import (
     maybe_init_distributed,
 )
 from cosmos_framework.utils import log
-from cosmos_framework.utils.lazy_config import instantiate
 from cosmos_framework.utils.generator.data_utils import get_vision_data_resolution
+from cosmos_framework.utils.lazy_config import instantiate
 
 _DEFAULT_ACTION_CHUNK_SIZE = 16
 ActionNormalization = Literal["auto", "meanstd", "minmax", "quantile", "quantile_rot"]
@@ -97,10 +107,7 @@ ResolvedActionNormalization = Literal["meanstd", "minmax", "quantile", "quantile
 _DURATION_FPS_TEMPLATE = "The video is {duration:.1f} seconds long and is of {fps:.0f} FPS."
 _RESOLUTION_TEMPLATE = "This video is of {height}x{width} resolution."
 
-# Viewpoint tag for the concat_view (third-person + wrist) eval the LIBERO client runs;
-# matches LIBEROLeRobotDataset's _VIEWPOINT_BY_CAMERA["concat_view"]. Used only when the
-# experiment trains with JSON-structured prompts (format_prompt_as_json=True).
-_LIBERO_JSON_VIEWPOINT = "concat_view"
+_PROTOCOL_VERSION = "cosmos-libero-eval-v1"
 
 
 # ---------------------------------------------------------------------------
@@ -457,10 +464,18 @@ class ActionServerArgs(pydantic.BaseModel):
     """Random seed for ``model.generate_samples_from_batch``."""
     guidance: float = 1.0
     """Guidance scale for denoising."""
-    num_steps: int = 30
+    num_steps: int = 8
     """Number of denoising steps."""
-    fps: int = 20
-    """Frames per second used for both prompt augmentation and rollout encoding."""
+    fps: int | None = None
+    """Optional compatibility assertion. The resolved policy profile is authoritative."""
+
+    # ----- strict checkpoint / policy contract -------------------------------
+    policy_profile_path: Path | None = None
+    """Optional checkpoint-specific profile JSON. Values must agree with checkpoint metadata."""
+    target_adapter_path: Path | None = None
+    """Explicit LIBERO target adapter. Required for base Edge zero-shot evaluation."""
+    weights_variant: Literal["ema", "regular"] | None = None
+    """Explicit evaluated weights variant. Conflicts with checkpoint metadata fail fast."""
 
     # ----- action policy parameters -------------------------------------------
     action_chunk_size: int | None = None
@@ -475,10 +490,9 @@ class ActionServerArgs(pydantic.BaseModel):
 
     # ----- action denormalization ---------------------------------------------
     action_stats_path: Path | None = None
-    """Path to action stats JSON for denormalizing predicted actions."""
-    action_normalization: ActionNormalization = "auto"
-    """Action normalization to invert. ``auto`` reads ``action_normalization``
-    from the experiment config (default ``minmax`` if unspecified)."""
+    """Optional compatibility assertion for the profile's action statistics path."""
+    action_normalization: ActionNormalization | None = None
+    """Optional compatibility assertion for the profile's normalization method."""
 
     # ----- prompt format ------------------------------------------------------
     format_prompt_as_json: bool | None = None
@@ -498,9 +512,9 @@ class ActionServerArgs(pydantic.BaseModel):
     """HTTP host to bind."""
     port: int = 8000
     """HTTP port to bind."""
-    http_400_on_error: bool = False
-    """If set, return HTTP 400 on inference errors. Default is HTTP 200 with an
-    empty action list, matching the legacy simulator client expectations."""
+    http_400_on_error: bool = True
+    """Return HTTP 400 on inference errors. Evaluation must never turn protocol
+    or model failures into silent empty policy outputs."""
 
     # ----- developer utilities ------------------------------------------------
     run_validation: bool = False
@@ -550,15 +564,68 @@ class ActionServerConfig:
     dump_every: int
     http_400_on_error: bool
     action_stats_path: Path | None
-    action_normalization: ActionNormalization
+    action_normalization: ResolvedActionNormalization
     experiment_name: str
     checkpoint_dir: str
+    profile_hash: str
 
 
 class ActionModelService:
     def __init__(self, args: ActionServerArgs) -> None:
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA is required for OmniMoTModel inference in this repo.")
+
+        config_file = getattr(args.checkpoint, "config_file", None)
+        resolved_config_path = str(config_file) if config_file else None
+        self.profile: LiberoCheckpointProfile = resolve_checkpoint_profile(
+            args.checkpoint.checkpoint_path,
+            profile_path=args.policy_profile_path,
+            target_adapter_path=args.target_adapter_path,
+            resolved_config_path=resolved_config_path,
+            weights_variant=args.weights_variant,
+        )
+
+        def _assert_override(name: str, provided: Any, expected: Any) -> None:
+            if provided is None:
+                return
+            normalized = str(Path(provided).expanduser().resolve()) if name == "action_stats_path" else provided
+            if normalized != expected:
+                raise ValueError(
+                    f"CLI override {name}={normalized!r} conflicts with resolved policy profile value {expected!r}"
+                )
+
+        _assert_override("fps", args.fps, int(self.profile.conditioning_fps))
+        _assert_override("action_chunk_size", args.action_chunk_size, self.profile.action_chunk_size)
+        _assert_override("raw_action_dim", args.raw_action_dim, self.profile.effective_action_dim)
+        _assert_override("action_stats_path", args.action_stats_path, self.profile.action_stats_path)
+        _assert_override("action_normalization", args.action_normalization, self.profile.action_normalization)
+        _assert_override("format_prompt_as_json", args.format_prompt_as_json, self.profile.format_prompt_as_json)
+
+        # Direct DCP loading through YAML/JSON does not currently remap EMA
+        # tensors onto regular parameter names. Reject it instead of claiming an
+        # EMA result that actually used regular weights. HF exports contain one
+        # already-selected variant.
+        if (
+            self.profile.checkpoint_format == CheckpointFormat.DCP
+            and self.profile.weights_variant == WeightsVariant.EMA
+            and resolved_config_path is not None
+            and Path(resolved_config_path).suffix.lower() in {".yaml", ".yml", ".json"}
+        ):
+            raise ValueError(
+                "EMA DCP evaluation through a resolved YAML/JSON config is unsupported; export EMA to HF first"
+            )
+
+        if self.profile.weights_variant == WeightsVariant.EMA:
+            args.checkpoint.use_ema_weights = True
+        else:
+            args.checkpoint.use_ema_weights = False
+
+        log.info(
+            f"[action-server] resolved {_PROTOCOL_VERSION} profile hash={self.profile.profile_hash} "
+            f"role={self.profile.checkpoint_role.value} zero_shot={self.profile.zero_shot} "
+            f"weights={self.profile.weights_variant.value} chunk={self.profile.action_chunk_size} "
+            f"fps={self.profile.conditioning_fps} action_dim={self.profile.effective_action_dim}"
+        )
 
         # OmniInference internally calls into FSDP / DTensor parallelize utilities
         # that expect a process group; create a single-rank PG when not under
@@ -596,23 +663,9 @@ class ActionModelService:
         self.setup_args: OmniSetupArgs = pipe.setup_args
         self.experiment_config: dict = _load_introspection_config_dict(self.setup_args)
 
-        # Resolve action_chunk_size: CLI arg > experiment config > default.
-        if args.action_chunk_size is not None:
-            resolved_chunk_size = int(args.action_chunk_size)
-        else:
-            config_chunk = _extract_chunk_length_from_config(self.experiment_config)
-            if config_chunk is not None:
-                resolved_chunk_size = config_chunk
-                log.info(
-                    f"[action-server] --action-chunk-size not specified, "
-                    f"using chunk_length={resolved_chunk_size} from experiment config"
-                )
-            else:
-                resolved_chunk_size = _DEFAULT_ACTION_CHUNK_SIZE
-                log.info(
-                    f"[action-server] --action-chunk-size not specified and not found in experiment config, "
-                    f"using default={resolved_chunk_size}"
-                )
+        # Policy semantics are resolved before model load; no evaluation-critical
+        # field is allowed to fall back to a server default.
+        resolved_chunk_size = self.profile.action_chunk_size
 
         # Resolve max_action_dim: CLI > model config > default (64).
         if args.max_action_dim is not None:
@@ -636,17 +689,18 @@ class ActionModelService:
             seed=int(args.seed),
             guidance=float(args.guidance),
             num_steps=int(args.num_steps),
-            fps=int(args.fps),
+            fps=int(self.profile.conditioning_fps),
             action_chunk_size=resolved_chunk_size,
             max_action_dim=resolved_max_action_dim,
-            raw_action_dim=int(args.raw_action_dim) if args.raw_action_dim is not None else None,
+            raw_action_dim=self.profile.effective_action_dim,
             dump_dir=args.dump_dir,
             dump_every=int(args.dump_every),
             http_400_on_error=bool(args.http_400_on_error),
-            action_stats_path=args.action_stats_path,
-            action_normalization=args.action_normalization,
+            action_stats_path=Path(self.profile.action_stats_path),
+            action_normalization=self.profile.action_normalization,
             experiment_name=setup_args.experiment or "",
             checkpoint_dir=setup_args.checkpoint_path,
+            profile_hash=self.profile.profile_hash,
         )
 
         self._lock = threading.Lock()
@@ -659,35 +713,22 @@ class ActionModelService:
         self.append_resolution_info = _extract_bool_from_config(
             self.experiment_config, "append_resolution_info", default=True
         )
-        # When the experiment trains with format_prompt_as_json=True, the caption is a
-        # structured JSON dict (ActionPromptJsonFormatter) and the legacy string appenders
-        # are skipped. Mirror that at serve time so the prompt format matches training. The
-        # CLI flag overrides the config when the eval experiment differs from the checkpoint.
-        if args.format_prompt_as_json is not None:
-            self.format_prompt_as_json = bool(args.format_prompt_as_json)
-        else:
-            self.format_prompt_as_json = _extract_bool_from_config(
-                self.experiment_config, "format_prompt_as_json", default=False
-            )
-        self._prompt_json_formatter = (
-            ActionPromptJsonFormatter(caption_key="ai_caption") if self.format_prompt_as_json else None
-        )
+        self.format_prompt_as_json = self.profile.format_prompt_as_json
         log.info(
             f"[action-server] prompt augmentation: "
             f"append_duration_fps={self.append_duration_fps}, append_resolution_info={self.append_resolution_info}, "
             f"format_prompt_as_json={self.format_prompt_as_json}"
         )
 
-        # Action denormalization stats.
-        self.action_min: torch.Tensor | None = None
-        self.action_range: torch.Tensor | None = None
-        self.action_mean: torch.Tensor | None = None
-        self.action_std: torch.Tensor | None = None
-        self.action_normalization: ResolvedActionNormalization = "minmax"
+        # One shared normalizer is carried in ActionProcessingRecord so the
+        # model's canonical ActionProcessor performs both unpadding and inverse
+        # normalization. The server must not denormalize a second time.
+        self.action_normalization: ResolvedActionNormalization = self.profile.action_normalization
         self.raw_action_dim: int | None = self.cfg.raw_action_dim
+        self.action_normalizer: ActionNormalizer | None = None
         self._load_action_normalization_stats()
-        if self.raw_action_dim is None:
-            self.raw_action_dim = 7
+        assert self.raw_action_dim is not None
+        assert self.action_normalizer is not None
 
         if args.run_validation:
             self._run_developer_validation()
@@ -697,100 +738,28 @@ class ActionModelService:
     # ------------------------------------------------------------------
 
     def _load_action_normalization_stats(self) -> None:
-        """Load action denormalization tensors from ``cfg.action_stats_path``.
-
-        Populates ``self.action_normalization``, the relevant tensor attributes
-        (``action_mean`` / ``action_std`` for meanstd; ``action_min`` /
-        ``action_range`` for minmax / quantile / quantile_rot), and infers
-        ``self.raw_action_dim`` when not explicitly set.
-        """
+        """Resolve the shared ActionProcessor normalizer from profile stats."""
         if self.cfg.action_stats_path is None:
-            return
-
-        self.action_normalization = self._resolve_action_normalization(self.cfg.action_normalization)
-        stats_path = Path(self.cfg.action_stats_path)
-        if not stats_path.is_absolute():
-            stats_path = Path.cwd() / stats_path
-        with open(stats_path) as f:
-            raw_stats = json.load(f)
-        if not isinstance(raw_stats, dict):
-            raise ValueError(f"Action stats file must contain a dict: {stats_path}")
+            raise ValueError("Resolved LIBERO policy profile is missing action statistics")
+        stats_path = Path(self.cfg.action_stats_path).resolve()
         stats_key = "global_raw" if self.action_normalization == "quantile_rot" else "global"
-        stats = raw_stats.get(stats_key, raw_stats)
-        if not isinstance(stats, dict):
-            raise ValueError(f"Action stats file must contain a dict or {stats_key} stats dict: {stats_path}")
-        if self.action_normalization == "meanstd":
-            if "mean" not in stats or "std" not in stats:
-                raise ValueError(f"Mean/std action normalization requires 'mean' and 'std' in {stats_path}")
-            self.action_mean = torch.tensor(stats["mean"], dtype=torch.float32)  # [D]
-            action_std = torch.tensor(stats["std"], dtype=torch.float32)  # [D]
-            self.action_std = torch.clamp(action_std, min=1e-8)  # [D]
-            stats_dim = int(self.action_mean.shape[0])
-            stats_summary = f"mean={self.action_mean.tolist()}, std={self.action_std.tolist()}"
-        elif self.action_normalization in ("quantile", "quantile_rot"):
-            if "q01" not in stats or "q99" not in stats:
-                raise ValueError(f"Quantile action normalization requires 'q01' and 'q99' in {stats_path}")
-            self.action_min = torch.tensor(stats["q01"], dtype=torch.float32)  # [D]
-            action_max = torch.tensor(stats["q99"], dtype=torch.float32)  # [D]
-            action_range = action_max - self.action_min  # [D]
-            self.action_range = torch.clamp(action_range, min=1e-6)  # [D]
-            stats_dim = int(self.action_min.shape[0])
-            stats_summary = f"q01={self.action_min.tolist()}, q99={action_max.tolist()}"
-        else:
-            if "min" not in stats or "max" not in stats:
-                raise ValueError(f"Min/max action normalization requires 'min' and 'max' in {stats_path}")
-            self.action_min = torch.tensor(stats["min"], dtype=torch.float32)  # [D]
-            action_max = torch.tensor(stats["max"], dtype=torch.float32)  # [D]
-            action_range = action_max - self.action_min  # [D]
-            self.action_range = torch.clamp(action_range, min=1e-6)  # [D]
-            stats_dim = int(self.action_min.shape[0])
-            stats_summary = f"min={self.action_min.tolist()}, max={action_max.tolist()}"
+        stats_numpy = load_action_stats(str(stats_path), stats_key=stats_key)
+        if not stats_numpy:
+            raise ValueError(f"No action statistics found in {stats_path}:{stats_key}")
+        stats = {name: torch.from_numpy(value) for name, value in stats_numpy.items()}
+        stats_dims = {int(value.shape[0]) for value in stats.values() if value.ndim == 1}
+        if len(stats_dims) != 1:
+            raise ValueError(f"Action statistics have inconsistent dimensions in {stats_path}: {sorted(stats_dims)}")
+        stats_dim = stats_dims.pop()
         if self.raw_action_dim is None:
             self.raw_action_dim = stats_dim
         if stats_dim != self.raw_action_dim:
             raise ValueError(f"Action stats dimension {stats_dim} does not match raw_action_dim={self.raw_action_dim}")
+        self.action_normalizer = resolve_action_normalization(self.action_normalization, stats)
         log.info(
             f"[action-server] Loaded action stats for denormalization from {stats_path}: "
-            f"normalization={self.action_normalization}, {stats_summary}"
+            f"normalization={self.action_normalization}, dim={stats_dim}, sha256={self.profile.action_stats_sha256}"
         )
-
-    def _resolve_action_normalization(
-        self, requested_normalization: ActionNormalization
-    ) -> ResolvedActionNormalization:
-        """Resolve auto action normalization from the loaded experiment config."""
-        if requested_normalization != "auto":
-            return requested_normalization
-
-        configured_normalization = _extract_str_from_config(self.experiment_config, "action_normalization")
-        if configured_normalization is None:
-            return "minmax"
-        if configured_normalization in ("meanstd", "minmax", "quantile", "quantile_rot"):
-            return configured_normalization  # type: ignore[return-value]
-        raise ValueError(
-            "action_policy_server_libero.py can denormalize action_normalization='minmax', 'meanstd', "
-            "'quantile', or 'quantile_rot'; "
-            f"loaded experiment config requested {configured_normalization!r}. "
-            "Pass --action-normalization explicitly if this checkpoint should use a supported method."
-        )
-
-    def _denormalize_action(self, action: torch.Tensor) -> torch.Tensor:
-        """Invert the configured action normalization."""
-        if self.action_normalization == "meanstd":
-            if self.action_mean is None or self.action_std is None:
-                return action
-            action_dim = self.action_mean.shape[0]
-            normalized = action[..., :action_dim]  # [...,D]
-            action_mean = self.action_mean.to(action.device)  # [D]
-            action_std = self.action_std.to(action.device)  # [D]
-            return normalized * action_std + action_mean  # [...,D]
-
-        if self.action_min is None or self.action_range is None:
-            return action
-        action_dim = self.action_min.shape[0]
-        normalized = action[..., :action_dim]  # [...,D]
-        action_min = self.action_min.to(action.device)  # [D]
-        action_range = self.action_range.to(action.device)  # [D]
-        return (normalized + 1.0) / 2.0 * action_range + action_min  # [...,D]
 
     # ------------------------------------------------------------------
     # HTTP plumbing
@@ -817,6 +786,7 @@ class ActionModelService:
         params.json without needing to know CLI flags.
         """
         return {
+            "protocol_version": _PROTOCOL_VERSION,
             "run_name": self.cfg.experiment_name,
             "checkpoint": self.cfg.checkpoint_dir,
             "config_file": str(self.setup_args.config_file),
@@ -827,8 +797,14 @@ class ActionModelService:
             "seed": self.cfg.seed,
             "action_chunk_size": self.cfg.action_chunk_size,
             "max_action_dim": self.cfg.max_action_dim,
-            "raw_action_dim": self.cfg.raw_action_dim,
+            "raw_action_dim": self.raw_action_dim,
             "action_stats_path": str(self.cfg.action_stats_path) if self.cfg.action_stats_path else None,
+            "action_stats_sha256": self.profile.action_stats_sha256,
+            "checkpoint_fingerprint": self.profile.checkpoint_fingerprint,
+            "action_normalization": self.action_normalization,
+            "format_prompt_as_json": self.format_prompt_as_json,
+            "weights_variant": self.profile.weights_variant.value,
+            "policy_profile": self.profile.model_dump(mode="json"),
         }
 
     # ------------------------------------------------------------------
@@ -842,26 +818,15 @@ class ActionModelService:
         return input_video_key
 
     def _build_json_prompt(self, prompt: str, *, video: torch.Tensor, image_size: torch.Tensor) -> str:
-        """Reproduce the training-time JSON prompt for format_prompt_as_json=True runs.
-
-        Runs the same ``ActionPromptJsonFormatter`` the training pipeline uses (after
-        spatial resize/pad), then ``json.dumps`` the dict exactly as
-        ``TextTokenizerTransform`` does before tokenization. ``idle_frames=0`` matches the
-        modal active-manipulation chunk (the policy should keep moving); ``viewpoint`` and
-        the zero ``action`` (total-frame count) mirror the LIBERO concat_view dataset."""
-        data_dict: dict[str, Any] = {
-            "ai_caption": prompt,
-            "viewpoint": _LIBERO_JSON_VIEWPOINT,
-            "video": video,  # post-pad [C,T,H,W]; formatter reads T for duration
-            "image_size": image_size,  # post-pad [H,W]; formatter reads resolution
-            "conditioning_fps": torch.tensor(self.cfg.fps, dtype=torch.long),
-            "mode": "wam",
-            # Zero action chunk: only its frame count (chunk length) is read, for "<idle> out of <N>".
-            "action": torch.zeros((self.cfg.action_chunk_size, self.cfg.max_action_dim), dtype=torch.float32),
-            "idle_frames": torch.tensor(0, dtype=torch.long),
-        }
-        formatted = self._prompt_json_formatter(data_dict)["ai_caption"]
-        return json.dumps(formatted) if isinstance(formatted, dict) else str(formatted)
+        """Build the byte-identical structured caption used by Edge LIBERO training."""
+        return build_libero_json_prompt(
+            prompt,
+            video=video,
+            image_size=image_size,
+            conditioning_fps=self.cfg.fps,
+            action_chunk_size=self.cfg.action_chunk_size,
+            idle_frames=0,
+        )
 
     def _prep_policy_item(self, req: dict[str, Any]) -> dict[str, Any]:
         """Validate one request and build the per-sample model inputs (video pad,
@@ -879,6 +844,11 @@ class ActionModelService:
         image_size = req.get("image_size")
         if not isinstance(image_size, int) or image_size <= 0:
             raise ValueError("'image_size' must be a positive integer")
+        seed = req.get("seed", self.cfg.seed)
+        if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+            raise ValueError("'seed' must be a non-negative integer")
+        if seed > 2**63 - 1:
+            raise ValueError("'seed' must fit in a signed 64-bit integer")
 
         img_chw_uint8 = _decode_base64_png_to_rgb_uint8(image_b64)
         img_h, img_w = img_chw_uint8.shape[-2:]
@@ -904,7 +874,7 @@ class ActionModelService:
             action_length=self.cfg.action_chunk_size,
             has_text=True,
         )
-        if self._prompt_json_formatter is not None:
+        if self.format_prompt_as_json:
             augmented_prompt = self._build_json_prompt(
                 prompt, video=pad_dict["video"], image_size=pad_dict["image_size"]
             )
@@ -923,6 +893,7 @@ class ActionModelService:
             "video_padded": pad_dict["video"],
             "padded_image_size": pad_dict["image_size"],
             "augmented_prompt": augmented_prompt,
+            "seed": seed,
             "sequence_plan": sequence_plan,
             "domain_name": domain_name,
             "image_size": image_size,
@@ -942,7 +913,7 @@ class ActionModelService:
         batch: dict[str, Any] = {
             input_video_key: [[p["video_padded"]] for p in preps],
             **make_batched_action_processing_fields(
-                ActionProcessingRecord(raw_action_dim=self.raw_action_dim, action_normalizer=None),
+                ActionProcessingRecord(raw_action_dim=self.raw_action_dim, action_normalizer=self.action_normalizer),
                 batch_size=n,
             ),
             "action": [[action_t_d] for _ in preps],
@@ -960,7 +931,7 @@ class ActionModelService:
                 samples = self.model.generate_samples_from_batch(
                     batch,
                     guidance=self.cfg.guidance,
-                    seed=[self.cfg.seed] * n,
+                    seed=[int(p["seed"]) for p in preps],
                     num_steps=self.cfg.num_steps,
                     has_negative_prompt=False,
                 )
@@ -968,13 +939,25 @@ class ActionModelService:
         actions: list[list[list[float]]] = []
         for i in range(n):
             pred = samples["action"][i].float().squeeze(0)  # [T,D]
-            pred = self._denormalize_action(pred)
-            actions.append(pred.detach().cpu().numpy().tolist())
+            validated = validate_action_chunk(
+                pred.detach().cpu(),
+                expected_horizon=self.cfg.action_chunk_size,
+                expected_action_dim=int(self.raw_action_dim),
+            )
+            actions.append(validated.tolist())
         log.info(
             f"[action-server] predict_batch n={n} steps={self.cfg.num_steps} "
             f"ms_total={(time.monotonic() - t0) * 1000.0:.1f} ms_infer={(t_inf1 - t_inf0) * 1000.0:.1f}"
         )
-        return {"actions": actions}
+        return {
+            "actions": actions,
+            "profile_hash": self.profile.profile_hash,
+            "checkpoint_fingerprint": self.profile.checkpoint_fingerprint,
+            "latency_ms": {
+                "total": (time.monotonic() - t0) * 1000.0,
+                "inference": (t_inf1 - t_inf0) * 1000.0,
+            },
+        }
 
     def predict_policy(self, req: dict[str, Any]) -> dict[str, Any]:
         """
@@ -1020,6 +1003,7 @@ class ActionModelService:
         image_size = prep["image_size"]
 
         # Action: zeros tensor as noise starting point for policy mode
+        prediction_seed = int(prep["seed"])
         action_t_d = torch.zeros(
             (self.cfg.action_chunk_size, self.cfg.max_action_dim),
             dtype=torch.float32,
@@ -1033,7 +1017,7 @@ class ActionModelService:
             # needs to externalize (invert) the generated action; building the batch
             # by hand previously omitted the record -> "cannot be externalized".
             **make_batched_action_processing_fields(
-                ActionProcessingRecord(raw_action_dim=self.raw_action_dim, action_normalizer=None),
+                ActionProcessingRecord(raw_action_dim=self.raw_action_dim, action_normalizer=self.action_normalizer),
                 batch_size=1,
             ),
             "action": [[action_t_d]],
@@ -1062,7 +1046,7 @@ class ActionModelService:
                 samples = self.model.generate_samples_from_batch(
                     batch,
                     guidance=self.cfg.guidance,
-                    seed=[self.cfg.seed],
+                    seed=[prediction_seed],
                     num_steps=self.cfg.num_steps,
                     has_negative_prompt=False,
                 )
@@ -1077,9 +1061,12 @@ class ActionModelService:
 
         # Extract actions: return all dimensions — (T, D) or (1, T, D)
         pred_action = pred_action.float().squeeze(0)  # [T,D]
-        pred_action = self._denormalize_action(pred_action)
-        pred_action_np = pred_action.detach().cpu().numpy()  # [T,D]
-        pred_action_list = pred_action_np.tolist()  # List of [a0, a1, ..., aD]
+        pred_action_np = validate_action_chunk(
+            pred_action.detach().cpu(),
+            expected_horizon=self.cfg.action_chunk_size,
+            expected_action_dim=int(self.raw_action_dim),
+        )
+        pred_action_list = pred_action_np.tolist()
 
         # Convert video to base64-encoded PNG frames
         pred_video_frames = _video_tensor_to_pil_images(pred_video_c_t_h_w)
@@ -1227,7 +1214,18 @@ class _ActionHandler(BaseHTTPRequestHandler):
             self._send_json(404, {"error": "Not found"})
 
     def do_POST(self) -> None:  # noqa: N802
-        if self.path not in ("/", "/predict", "/predict_batch"):
+        if self.path in ("/", "/predict"):
+            self._send_json(
+                410,
+                {
+                    "error": (
+                        "Legacy single-item policy endpoint is disabled for cosmos-libero-eval-v1; "
+                        "send {'items': [...]} to /predict_batch (including N=1)."
+                    )
+                },
+            )
+            return
+        if self.path != "/predict_batch":
             self._send_json(404, {"error": "Not found"})
             return
 

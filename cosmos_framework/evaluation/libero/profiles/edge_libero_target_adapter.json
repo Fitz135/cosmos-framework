@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "adapter_id": "cosmos3-edge-libero-10fps-v1",
+  "target": "libero",
+  "domain_name": "libero",
+  "action_chunk_size": 8,
+  "conditioning_fps": 10.0,
+  "effective_action_dim": 10,
+  "action_space": "frame_wise_relative",
+  "rotation_space": "6d",
+  "pose_coordinate_frame": "native",
+  "action_normalization": "quantile_rot",
+  "action_stats_path": "../../../data/generator/action/normalizer_stats/libero_10fps_pm_one_native_frame_wise_relative_rot6d.json",
+  "action_stats_sha256": "74f63b4aaf9bc0623e8544d8c9fe9d3da343604096082a2621928fca039010f1",
+  "format_prompt_as_json": true,
+  "cameras": [
+    "agentview",
+    "wrist"
+  ],
+  "image_size": 256,
+  "rotate_images": true,
+  "control_mode": "OSC_POSE",
+  "control_frequency": 10,
+  "gripper_mode": "pm_one"
+}

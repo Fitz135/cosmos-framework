@@ -31,7 +31,11 @@ global batch 2048):
 | Edge run TOML    | `examples/toml/sft_config/action_policy_libero_all_edge_10fps.toml`                                  |
 | Edge launch      | `examples/launch_sft_action_policy_libero_all_edge_10fps.sh`                                         |
 | Inference server | `cosmos_framework/scripts/action_policy_server_libero.py`                                            |
-| Closed-loop eval | `cosmos_framework/simulation/libero/closed_loop_eval.py`                                             |
+| Edge preflight   | `cosmos_framework/evaluation/libero/preflight.py`                                                   |
+| Edge orchestrator| `cosmos_framework/evaluation/libero/job.py`                                                         |
+| Edge runner      | `cosmos_framework/evaluation/libero/runner.py`                                                      |
+| Edge adapter     | `cosmos_framework/evaluation/libero/profiles/edge_libero_target_adapter.json`                       |
+| Nano legacy eval | `cosmos_framework/simulation/libero/closed_loop_eval.py`                                             |
 
 ## 1. Data
 
@@ -182,65 +186,271 @@ EXTRA_TAIL_OVERRIDES="trainer.callbacks.libero_rollout.every_n=4000 trainer.call
 ```
 
 
-## 3. Closed-loop eval
+## 3. Strict Cosmos3-Edge closed-loop eval
 
-The current server/eval example targets the Nano presets. Start the policy
-server on a **trained** Nano checkpoint (the Nano base DCP has no action heads),
-then run the LIBERO simulator client against it. For either Nano preset,
-`action_policy_libero_nano` supplies the model config for either run's
-checkpoint; just point `--checkpoint-path` at the one you trained.
+Cosmos3-Edge evaluation uses a strict pipeline:
+
+1. the simulator preflight locks the LIBERO packages, assets, EGL renderer,
+   camera streams, controller, and control frequency;
+2. the checkpoint resolver merges load metadata with the explicit target
+   adapter and rejects missing or conflicting policy semantics;
+3. the single-checkpoint job starts the policy server, validates its versioned
+   `/info` handshake and immutable checkpoint fingerprint, invokes the runner
+   in a separate LIBERO environment, and cleans up both process groups;
+4. the runner writes resumable episode records and seals a run only after every
+   requested episode has a terminal non-infrastructure result.
+
+Do not use the legacy Nano client for Edge checkpoints. It does not implement
+the strict profile, fingerprint, handshake, or canonical artifact contract.
+
+### 3.1 Formal three-checkpoint matrix
+
+All three comparison targets are HF checkpoints and use the committed adapter:
 
 ```bash
-python -m cosmos_framework.scripts.action_policy_server_libero \
-  --experiment action_policy_libero_nano \
-  --experiment-overrides "model.config.tokenizer.vae_path=$WAN_VAE_PATH" \
-  --checkpoint-path <trained DCP dir>/checkpoints/iter_000001500 \
-  --action-normalization quantile_rot \
-  --action-stats-path cosmos_framework/data/generator/action/normalizer_stats/libero_native_frame_wise_relative_rot6d.json \
-  --raw-action-dim 10 --fps 20 --port 8000
+TARGET_ADAPTER="$PWD/cosmos_framework/evaluation/libero/profiles/edge_libero_target_adapter.json"
 ```
 
-The LIBERO sim needs a separate venv (robosuite/mujoco pins conflict with the
-training env):
+| Checkpoint | Required job flags | Interpretation |
+| ---------- | ------------------ | -------------- |
+| Base Cosmos3-Edge HF regular | `--checkpoint-path <BASE_EDGE_HF> --target-adapter-path "$TARGET_ADAPTER" --weights-variant regular` | Explicit zero-shot LIBERO diagnostic. Report `checkpoint_role=base, zero_shot=true`; never describe it as a fine-tuned policy. |
+| 5k fine-tuned Edge HF EMA | `--checkpoint-path <EDGE_5K_EMA_HF> --target-adapter-path "$TARGET_ADAPTER" --weights-variant ema` | Fine-tuned EMA checkpoint at iteration 5000. |
+| 10k fine-tuned Edge HF EMA | `--checkpoint-path <EDGE_10K_EMA_HF> --target-adapter-path "$TARGET_ADAPTER" --weights-variant ema` | Fine-tuned EMA checkpoint at iteration 10000. |
+
+A self-contained HF directory normally needs no external `--config-file`.
+If a deployment requires an explicit Edge load config, pass the exact pinned
+file; it becomes part of checkpoint identity and must remain unchanged across
+resume. The fine-tuned exports still need the target adapter when their
+`checkpoint.json.policy` contains only the training-native chunk/FPS/domain
+fields. `--policy-profile-path` is reserved for an explicit complete profile;
+duplicate sources must agree exactly.
+
+DCP is a source/debug format, not one of the formal three comparison targets.
+A fine-tuned DCP requires its matching resolved `--config-file`, the adapter,
+and `--weights-variant regular`. Direct EMA DCP loading through YAML/JSON is
+unsupported; export EMA to HF.
+
+The resolved adapter locks chunk 8 at 10 FPS, effective action dimension 10,
+frame-wise relative translation, rot6d rotation, native pose frame,
+`quantile_rot` statistics and SHA-256, JSON prompts, `agentview+wrist`
+256-pixel inputs with 180-degree correction, OSC_POSE at 10 Hz, and `pm_one`
+gripper semantics. The job deliberately exposes no runtime overrides for these
+profile fields.
+
+### 3.2 Locked simulator environment and preflight
+
+Keep the CUDA model server and simulator in separate environments. Create the
+simulator environment from the committed lockfile instead of cloning LIBERO and
+manually mixing versions:
 
 ```bash
-# Optional — only on a headless container without working GPU EGL:
-#   export NVIDIA_DRIVER_CAPABILITIES=all
-#   apt-get install -y libegl1 libglvnd0 libgl1 libglib2.0-0 ffmpeg
-#   mkdir -p /usr/share/glvnd/egl_vendor.d
-#   echo '{"file_format_version":"1.0.0","ICD":{"library_path":"libEGL_nvidia.so.0"}}' \
-#     > /usr/share/glvnd/egl_vendor.d/10_nvidia.json
+cd <REPO_ROOT>
+UV_PROJECT_ENVIRONMENT=.venv-libero uv sync --frozen --group libero
 
-uv venv --python 3.10 .libenv && VV=.libenv/bin/python
-git clone https://github.com/Lifelong-Robot-Learning/LIBERO.git && \
-  uv pip install -p $VV -e LIBERO -r LIBERO/requirements.txt
-uv pip install -p $VV "robosuite==1.4.1" "mujoco==2.3.7" "torch<2.6" loguru requests scipy pillow numpy
-mkdir -p ~/.libero && touch ~/.libero/config.yaml
-RS=$($VV -c "import robosuite,os;print(os.path.dirname(robosuite.__file__))"); $VV "$RS/scripts/setup_macros.py"
-$VV -c "from libero.libero import set_libero_default_path; set_libero_default_path()"
-
-MUJOCO_GL=egl PYTHONPATH=$PWD:$PWD/LIBERO $VV \
-  cosmos_framework/simulation/libero/closed_loop_eval.py \
-  --server_url http://localhost:8000 \
-  --task_suite libero_10 --num_trials_per_task 50 --num_envs 8 \
-  --camera agentview,wrist --image_size 256 \
-  --action_space frame_wise_relative --rotation_space 6d --action_dim 10 \
-  --output_dir results/libero_closed_loop_10
+SERVER_PYTHON="$PWD/.venv/bin/python"
+RUNNER_PYTHON="$PWD/.venv-libero/bin/python"
 ```
+
+The PyPI LIBERO wheel does not contain the simulator asset payload. Download
+the official `jadechoghari/libero-assets` snapshot once into a persistent data
+directory, then point a non-interactive site config at that directory. Use
+absolute paths for both placeholders below. This initializer intentionally
+refuses to overwrite an existing non-empty site config:
+
+```bash
+export LIBERO_CONFIG_PATH=<ABSOLUTE_LIBERO_CONFIG_DIR>
+export LIBERO_ASSET_DIR=<ABSOLUTE_PERSISTENT_LIBERO_ASSET_DIR>
+mkdir -p "$LIBERO_CONFIG_PATH" "$LIBERO_ASSET_DIR"
+if [ -s "$LIBERO_CONFIG_PATH/config.yaml" ]; then
+  echo "Refusing to overwrite existing LIBERO config" >&2
+  exit 1
+fi
+touch "$LIBERO_CONFIG_PATH/config.yaml"
+
+"$RUNNER_PYTHON" -c \
+  'import os; from libero.libero.utils.download_utils import download_assets_from_huggingface; download_assets_from_huggingface(os.environ["LIBERO_ASSET_DIR"])'
+
+"$RUNNER_PYTHON" - <<'PY'
+import os
+from pathlib import Path
+
+import yaml
+from libero.libero import get_default_path_dict
+
+asset_dir = Path(os.environ["LIBERO_ASSET_DIR"]).expanduser().resolve()
+required = (
+    "articulated_objects",
+    "stable_scanned_objects",
+    "turbosquid_objects",
+    "stable_hope_objects",
+    "scenes",
+)
+missing = [name for name in required if not (asset_dir / name).is_dir()]
+if missing:
+    raise SystemExit(f"incomplete LIBERO assets: {missing}")
+
+config = get_default_path_dict()
+config["assets"] = str(asset_dir)
+config_path = Path(os.environ["LIBERO_CONFIG_PATH"]).expanduser().resolve() / "config.yaml"
+config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+PY
+```
+
+On an offline worker, pre-stage the same official snapshot at
+`LIBERO_ASSET_DIR` and run only the verification/configuration block. For an
+existing pinned config, keep it unchanged and verify that its `assets` entry
+resolves to a complete asset directory before preflight.
+
+Every artifact path must be an absolute per-run directory below the output root
+compiled into `cosmos_framework.evaluation.libero.artifacts.OUTPUT_ROOT`.
+Discover it instead of copying a developer path into scripts:
+
+```bash
+CANONICAL_OUTPUT_ROOT="$("$SERVER_PYTHON" -c \
+  'from cosmos_framework.evaluation.libero.artifacts import OUTPUT_ROOT; print(OUTPUT_ROOT)')"
+PREFLIGHT_DIR="$CANONICAL_OUTPUT_ROOT/cosmos-framework-eval/libero/preflight/<RUN_ID>"
+
+export LD_LIBRARY_PATH=''
+export MUJOCO_GL=egl
+export PYOPENGL_PLATFORM=egl
+export MUJOCO_EGL_DEVICE_ID=0
+export EGL_DEVICE_ID=0
+
+"$RUNNER_PYTHON" -m cosmos_framework.evaluation.libero.preflight \
+  --output-dir "$PREFLIGHT_DIR" \
+  --seed 0 \
+  --render-gpu-device-id 0
+```
+
+Proceed only when `preflight.json` says `"status": "passed"`. It records the
+installed LIBERO, robosuite, and MuJoCo versions; BDDL, init-state, and asset
+directories; EGL details; adapter and action-stat hashes; and a task-0 render
+smoke for `libero_spatial`, `libero_object`, `libero_goal`, and
+`libero_10`. It does not certify `libero_90`.
+
+### 3.3 Run one checkpoint
+
+The job uses its own Python for the CUDA policy server and
+`--runner-python` for the simulator. This 10k EMA smoke command makes every
+sampling and rollout choice explicit:
+
+```bash
+CHECKPOINT=<EDGE_10K_EMA_HF>
+RUN_DIR="$CANONICAL_OUTPUT_ROOT/cosmos-framework-eval/libero/runs/<CHECKPOINT_ID>/smoke/libero_spatial"
+
+export COSMOS_EVAL_IMAGE=<EXACT_IMAGE_REFERENCE>
+export COSMOS_EVAL_JOB_ID=<SCHEDULER_JOB_ID>
+
+"$SERVER_PYTHON" -m cosmos_framework.evaluation.libero.job \
+  --checkpoint-path "$CHECKPOINT" \
+  --target-adapter-path "$TARGET_ADAPTER" \
+  --weights-variant ema \
+  --runner-python "$RUNNER_PYTHON" \
+  --server-port 8000 \
+  --num-steps 8 \
+  --guidance 1.0 \
+  --task-suite libero_spatial \
+  --task-ids 0 \
+  --trials 1 \
+  --num-envs 1 \
+  --action-horizon 8 \
+  --seed 0 \
+  --max-steps 20 \
+  --warmup-steps 10 \
+  --mujoco-gl egl \
+  --render-gpu-device-id 0 \
+  --request-timeout 120 \
+  --output-dir "$RUN_DIR"
+```
+
+For the base and 5k exports, replace only the checkpoint-specific matrix flags.
+The job normalizes checkpoint/config/profile/adapter paths before switching
+subprocess working directories. It rejects occupied ports, malformed or stale
+handshakes, profile/fingerprint mismatches, invalid action payloads, a
+zero-episode run, unresolved infrastructure failures, and non-zero child exits.
+
+Use this promotion ladder; each checkpoint, stage, and suite gets a new run
+directory:
+
+| Stage | Suites and tasks | Trials | Parallel envs | Max steps | Gate |
+| ----- | ---------------- | ------ | ------------- | --------- | ---- |
+| Smoke | one primary suite, `--task-ids 0` | 1 | 1 | 20 | Server loads, handshake matches, one terminal episode, finite `[8,10]` actions, no infrastructure error. |
+| Pilot | one primary suite, `--task-ids 0,1` | 3 | 2 | 0 (suite default) | Deterministic seeds, reset/step stability, sensible latency and memory, complete artifacts. |
+| Full | each of the four primary suites, empty `--task-ids` | 50 per task | Start at 8 | 0 (suite default) | Separate sealed run for every checkpoint × suite; aggregate only identical profile/fingerprint and sampling settings. |
+
+For full evaluation, invoke the same job command once per suite:
+
+```bash
+for SUITE in libero_spatial libero_object libero_goal libero_10; do
+  RUN_DIR="$CANONICAL_OUTPUT_ROOT/cosmos-framework-eval/libero/runs/<CHECKPOINT_ID>/full/$SUITE"
+  # Re-run the command above with:
+  #   --task-suite "$SUITE" --task-ids "" --trials 50
+  #   --num-envs 8 --max-steps 0 --output-dir "$RUN_DIR"
+done
+```
+
+A run directory contains `manifest.json`, `episodes.jsonl`,
+`infra_errors.jsonl`, `metrics.json`, `_SUCCESS`, `job.log`,
+`server.log`, `runner.log`, and `server_runtime/`. Re-running the exact
+same request resumes stable episode IDs. A changed checkpoint, config, profile,
+sampling request, or rollout plan requires a new run directory. Successfully
+retried historical infrastructure attempts remain auditable, while terminal
+`overall.infra_errors` must be zero.
+
+### 3.4 Scheduled execution
+
+The server and runner communicate over loopback, so use one replica and one GPU
+per job. Pin the exact image and workspace mount and record both in provenance.
+Verify the installed `rlaunch` or `rjob` help before submission.
+
+```bash
+rlaunch \
+  --gpu=1 --cpu=16 --memory=131072 \
+  --charged-group=<QUOTA_GROUP> \
+  --positive-tags=<GPU_TAG> \
+  --image=<EVAL_IMAGE> \
+  --mount=<WORKSPACE_MOUNT_URI>:<WORKSPACE_MOUNT_POINT> \
+  -- bash
+```
+
+```bash
+rjob submit \
+  --name <JOB_NAME> \
+  --charged-group <QUOTA_GROUP> \
+  --image <EVAL_IMAGE> \
+  --replica 1 --gpu 1 --cpu 16 --memory 131072 \
+  --positive-tags <GPU_TAG> \
+  --mount <WORKSPACE_MOUNT_URI>:<WORKSPACE_MOUNT_POINT> \
+  -- bash -lc '<source environment; export EGL, LIBERO, COSMOS_EVAL_IMAGE, and COSMOS_EVAL_JOB_ID; run preflight or job>'
+```
+
+Do not launch multiple replicas against one run directory. Size CPU and memory
+from the pilot when increasing `--num-envs`.
+
+### 3.5 Nano legacy client
+
+`cosmos_framework/simulation/libero/closed_loop_eval.py` remains a Nano
+legacy path for previously trained Nano checkpoints. Its 20 FPS assumptions,
+manual policy overrides, response protocol, and relative output layout are not
+the Cosmos3-Edge benchmark contract. Use it only to reproduce legacy Nano
+results; use `preflight` + `job` + `runner` for every Edge result.
 
 ## 4. Heads-up
 
-- **Lower-memory GPUs** — reduce the per-rank batch:
-  `--opts dataloader_train.max_samples_per_batch=64` (scale `replicate` to keep
-  global batch 2048).
-
-Eval parity — the client/server already handle these; verify if accuracy is low:
-
-- **Concat layout** — run with `--camera agentview,wrist --image_size 256` so the
-  256×512 concat matches training (the server snaps it to 192×320 identically).
-- **Gripper** — model emits `[0, 1]`; the env wants `[-1, 1]` (negative = open).
-  The client applies `1 − 2·g`; flip the sign if the gripper never opens.
-- **Image orientation** — sim frames are rotated 180° vs training; the client
-  rotates them back.
-- **Normalization** — start the server with `--action-normalization quantile_rot`
-  and the bundled rot6d stats, or actions come out at the wrong scale.
+- **Lower-memory training GPUs** — reduce the per-rank training batch with
+  `--opts dataloader_train.max_samples_per_batch=64` and scale replication or
+  accumulation to preserve global batch 2048.
+- **Base Edge is zero-shot** — the target adapter makes the action space
+  interpretable but does not make the base model LIBERO-trained. Keep its
+  metrics separate from fine-tuned checkpoints.
+- **DCP EMA** — direct EMA evaluation through a YAML/JSON DCP config is
+  unsupported. Export EMA to HF.
+- **Profile parity is fail-fast** — do not repair camera order, image rotation,
+  gripper sign, control frequency, normalization, prompt format, or action
+  dimension with ad hoc runtime flags. Fix the checkpoint metadata or explicit
+  adapter/profile.
+- **Primary-suite guarantee** — preflight certifies the four 10-task suites
+  listed above, not `libero_90`.
+- **Canonical output only** — arbitrary relative or external output directories
+  are rejected. Use a distinct absolute subdirectory for each immutable
+  checkpoint × suite × stage request.
