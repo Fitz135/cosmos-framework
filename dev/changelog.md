@@ -28,6 +28,25 @@ Use this template:
 - **Validation**: ...
 ```
 
+## DEV-0016 — 2026-08-19 02:42 +08:00 — Harden LIBERO policy startup identity
+
+- **Area**: Cosmos3-Edge LIBERO policy-server startup and HF checkpoint
+  identity.
+- **Summary**: Disabled the unrelated generative-media guardrails for the
+  fixed robot-policy endpoint so model startup no longer downloads
+  `Cosmos-Guardrail1`, and made HF fingerprinting count an automatically
+  discovered config inside the checkpoint exactly once while preserving
+  explicit external-config identity.
+- **Documentation**: Documented the offline action-server contract and the
+  first scheduled H200 smoke evidence, including the corrected private-GPU
+  scheduling selector and the two runtime defects exposed by the failed
+  pre-fix jobs.
+- **Validation**: The two focused regression files passed 26 tests; the full
+  LIBERO evaluation and action-server profile suite passed 129 tests; Ruff
+  lint and format checks passed; focused Pyrefly reported 0 errors (4
+  suppressed). All three pre-fix H200 jobs passed the locked four-suite EGL
+  preflight before consistently exposing the guarded startup failure.
+
 ## DEV-0015 — 2026-08-18 05:27 +08:00 — Add strict Cosmos3-Edge LIBERO evaluation
 
 - **Area**: Cosmos3-Edge checkpoint identity, policy serving, LIBERO simulator

@@ -301,7 +301,8 @@ def _checkpoint_fingerprint(
         }
         selected = set(weight_files) | metadata_files
         labeled = {path.relative_to(checkpoint).as_posix(): path for path in selected}
-        if resolved_config_path is not None:
+        selected_resolved_paths = {path.resolve() for path in selected}
+        if resolved_config_path is not None and resolved_config_path not in selected_resolved_paths:
             labeled[f"__resolved_config__/{resolved_config_path.name}"] = resolved_config_path
         return _hash_checkpoint_files(labeled)
 

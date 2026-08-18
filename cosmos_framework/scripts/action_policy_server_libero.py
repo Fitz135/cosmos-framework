@@ -536,6 +536,10 @@ class ActionServerArgs(pydantic.BaseModel):
         base = OmniSetupOverrides.model_validate(self.checkpoint.model_dump())
         base.output_dir = output_dir
         base.sampler = self.sampler
+        # The policy endpoint consumes fixed simulator observations; generic
+        # text/video guardrails are unrelated and would download a separate
+        # checkpoint before the action model can start.
+        base.guardrails = False
         return base
 
 

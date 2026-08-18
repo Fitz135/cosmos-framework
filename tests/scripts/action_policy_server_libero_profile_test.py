@@ -101,6 +101,15 @@ def _request(seed: int) -> dict[str, Any]:
     }
 
 
+def test_action_server_disables_generic_guardrails() -> None:
+    checkpoint = server.CheckpointOverrides.model_construct(checkpoint_path="/checkpoints/edge")
+    args = server.ActionServerArgs(checkpoint=checkpoint)
+
+    setup_overrides = args.build_setup_overrides()
+
+    assert setup_overrides.guardrails is False
+
+
 def _patch_cpu_preprocessing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         server,

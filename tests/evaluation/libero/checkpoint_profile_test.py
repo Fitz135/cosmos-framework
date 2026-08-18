@@ -96,6 +96,25 @@ def test_weight_content_changes_checkpoint_fingerprint_and_profile_hash(tmp_path
     assert first.profile_hash != second.profile_hash
 
 
+def test_internal_hf_config_is_not_double_counted_in_checkpoint_fingerprint(tmp_path: Path) -> None:
+    stats_path = _stats(tmp_path)
+    checkpoint = _hf_checkpoint(
+        tmp_path,
+        policy={"action_chunk_size": 8, "conditioning_fps": 10.0, "domain_name": "libero"},
+    )
+    profile_path = _write_json(tmp_path / "profile.json", _complete_profile(stats_path))
+
+    without_resolved_config = resolve_checkpoint_profile(checkpoint, profile_path=profile_path)
+    with_resolved_config = resolve_checkpoint_profile(
+        checkpoint,
+        profile_path=profile_path,
+        resolved_config_path=checkpoint / "config.json",
+    )
+
+    assert with_resolved_config.checkpoint_fingerprint == without_resolved_config.checkpoint_fingerprint
+    assert with_resolved_config.profile_hash == without_resolved_config.profile_hash
+
+
 def test_external_hf_config_changes_checkpoint_fingerprint_and_profile_hash(tmp_path: Path) -> None:
     stats_path = _stats(tmp_path)
     checkpoint = _hf_checkpoint(

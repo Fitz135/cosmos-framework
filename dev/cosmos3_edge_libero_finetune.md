@@ -341,6 +341,27 @@ Promotion remains pending:
 Base metrics will be labeled zero-shot and never mixed with fine-tuned
 results. The 5k and 10k EMA results remain separate checkpoint fingerprints.
 
+### First scheduled H200 smoke and startup corrections
+
+The initial 2026-08-19 retry used three independent one-GPU jobs. An explicit
+`h200` positive tag excluded two machines that the scheduler identified as
+H200s, so the still-empty `v2` jobs were stopped and replaced with the proven
+private-pool contract: `group=evoagi_gpu`, `charged-group=evoagi_gpu`,
+`private-machine=group`, `preemptible=no`, `feature/gpfs=yes`, the GPFS1 mount,
+and `brainpp.cn/fuse=1`. All three `v3` jobs then reached H200 workers and their
+locked GPU preflights passed all four primary suites.
+
+The `v3` policy servers failed before model inference for one common reason:
+the generic inference defaults enabled media guardrails and attempted to
+download `nvidia/Cosmos-Guardrail1`, which timed out. The run also exposed a
+second fail-fast issue before handshake: the loader-discovered HF
+`config.json` was already part of the checkpoint metadata set but was hashed a
+second time as an external resolved config, producing a different server
+profile hash from the job resolver. DEV-0016 disables media guardrails for the
+robot-policy endpoint and de-duplicates checkpoint-internal resolved configs;
+truly external configs remain fingerprinted. The failed `v3` directories are
+diagnostic evidence only, and the corrected evaluation must use new run IDs.
+
 ### PJLab launch skeletons
 
 The current mount URI is

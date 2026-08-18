@@ -369,6 +369,14 @@ subprocess working directories. It rejects occupied ports, malformed or stale
 handshakes, profile/fingerprint mismatches, invalid action payloads, a
 zero-episode run, unresolved infrastructure failures, and non-zero child exits.
 
+The action-policy server disables the framework's generic text/video
+guardrails. Those guardrails protect generative-media endpoints and would add
+an unrelated checkpoint download before a fixed simulator policy can start.
+For local HF checkpoints, configuration files already inside the checkpoint
+are fingerprinted exactly once even when the loader discovers them
+automatically. A configuration supplied from outside the checkpoint remains an
+explicit part of the immutable fingerprint.
+
 Use this promotion ladder; each checkpoint, stage, and suite gets a new run
 directory:
 
