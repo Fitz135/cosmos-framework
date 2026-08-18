@@ -86,7 +86,7 @@ from cosmos_framework.evaluation.libero.schema import (
     WeightsVariant,
 )
 from cosmos_framework.inference.args import OmniSetupArgs, OmniSetupOverrides
-from cosmos_framework.inference.common.args import CheckpointOverrides, ConfigFileType, tyro_cli
+from cosmos_framework.inference.common.args import DEFAULT_CONFIG_FILE, CheckpointOverrides, ConfigFileType, tyro_cli
 from cosmos_framework.inference.common.config import deserialize_config_dict
 from cosmos_framework.inference.common.init import init_output_dir
 from cosmos_framework.inference.inference import OmniInference
@@ -108,6 +108,13 @@ _DURATION_FPS_TEMPLATE = "The video is {duration:.1f} seconds long and is of {fp
 _RESOLUTION_TEMPLATE = "This video is of {height}x{width} resolution."
 
 _PROTOCOL_VERSION = "cosmos-libero-eval-v1"
+
+
+def _profile_identity_config_path(config_file: str | Path | None) -> str | None:
+    """Return only a non-default config whose content belongs in profile identity."""
+    if config_file is None or str(config_file) == DEFAULT_CONFIG_FILE:
+        return None
+    return str(config_file)
 
 
 # ---------------------------------------------------------------------------
@@ -580,7 +587,7 @@ class ActionModelService:
             raise RuntimeError("CUDA is required for OmniMoTModel inference in this repo.")
 
         config_file = getattr(args.checkpoint, "config_file", None)
-        resolved_config_path = str(config_file) if config_file else None
+        resolved_config_path = _profile_identity_config_path(config_file)
         self.profile: LiberoCheckpointProfile = resolve_checkpoint_profile(
             args.checkpoint.checkpoint_path,
             profile_path=args.policy_profile_path,

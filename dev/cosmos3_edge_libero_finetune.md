@@ -252,9 +252,18 @@ Sampling is separate and explicitly recorded with
 
 | Target | Current PJLab path | Required flags and interpretation |
 | ------ | ------------------- | --------------------------------- |
-| Base Edge HF regular | `/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/model/Cosmos3-Edge-hf` | Adapter plus `--weights-variant regular`; base, explicit zero-shot diagnostic only. An explicit pinned load config may be supplied if the runtime needs one. |
+| Base Edge action HF regular | `/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/output/cosmos-framework-eval/checkpoints/cosmos3-edge-base-regular-hf` | Exported from the Base action DCP with `--base-checkpoint`; adapter plus `--weights-variant regular`; explicit zero-shot diagnostic only. |
 | 5k fine-tune HF EMA | `/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/model/cosmos3-edge-libero-all-10fps/export-final-iter5000` | Adapter plus `--weights-variant ema`; formal 5k fine-tuned target. |
 | 10k fine-tune HF EMA | `/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/output/cosmos-framework-eval/checkpoints/cosmos3-edge-libero-10k-ema` | Adapter plus `--weights-variant ema`; formal 10k fine-tuned target. |
+
+The public `/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/model/Cosmos3-Edge-hf`
+snapshot is used only as the Base export's processor and vision source. It is a
+native Transformers `Cosmos3EdgeForConditionalGeneration` snapshot, not a
+Cosmos3 Omni action-policy checkpoint, and must not be passed directly to the
+LIBERO action server. The Base action source is
+`/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/model/Cosmos3-Edge-dcp/model`;
+its relocated config and provenance manifest live in
+`/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/output/cosmos-framework-eval/checkpoints/cosmos3-edge-base-regular/`.
 
 Both fine-tuned exports contain only their selected EMA weights. Their
 `checkpoint.json.policy` records training-native policy fields; the target
@@ -272,12 +281,13 @@ EMA targets are HF exports.
 
 ### Resolved identity evidence
 
-The strict resolver successfully resolved all three real comparison targets on
-2026-08-18:
+The strict resolver resolved the two fine-tuned comparison targets on
+2026-08-18. The former public-HF Base identity is retained below only as an
+invalidated audit record until the regenerated action export is resolved:
 
 | Target | Checkpoint fingerprint | Policy profile hash |
 | ------ | ---------------------- | ------------------- |
-| Base Edge HF regular | `dc99be118279d8b86c1697cfb7e03243c6bd683b1800d6ec051c653beee644af` | `adc9b91023b01829e7e7d6517ed433a5a7e51bd66c5bf072b6a65ecd4cf3832b` |
+| Base Edge action HF regular | Pending regenerated self-contained export; the former public-HF identity is invalid | Pending regenerated self-contained export |
 | 5k fine-tune HF EMA | `05bd7a37317b1c078951d41fd2a88917aab3f7c563f9b81b777d4858f02656c4` | `4248de2aaf4a229a146b7303f270e51060f6509b5cd52f3dcf550f16e0623f01` |
 | 10k fine-tune HF EMA | `ca83c3545605e368c30a8a4a89188294d6b6f7ff6d85e73b11cfd8c1dc4a2921` | `b3284d55e4ec80e2ff4c4126b55be5cc75c66aa571509d1c5f1ee90d53c32783` |
 
@@ -361,6 +371,19 @@ profile hash from the job resolver. DEV-0016 disables media guardrails for the
 robot-policy endpoint and de-duplicates checkpoint-internal resolved configs;
 truly external configs remain fingerprinted. The failed `v3` directories are
 diagnostic evidence only, and the corrected evaluation must use new run IDs.
+
+The `v4` retry proved that disabling guardrails was effective: the 10k server
+loaded the local model without a guardrail download. It also exposed two
+remaining identity errors before any rollout. First, the server fingerprinted
+the framework's implicit `base/config.py` before the HF loader replaced it with
+the checkpoint-local config, so its handshake differed from the job resolver.
+Second, the supposed Base policy path was actually the public Transformers
+reasoner/vision snapshot and failed because it has no Cosmos3 Omni
+`vlm_config.tokenizer` node. DEV-0017 excludes only the implicit default config
+from policy identity, preserves every explicit external config, adds an
+explicit regular-only Base export mode, and replaces the invalid Base target
+with a self-contained action HF export derived from the Base DCP. The `v4`
+directories remain diagnostic evidence and are not promotable.
 
 ### PJLab launch skeletons
 

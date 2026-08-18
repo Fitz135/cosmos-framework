@@ -183,6 +183,37 @@ def is_edge_model(model_dict: dict[str, Any]) -> bool:
     return "Cosmos3-Edge" in backbone_path
 
 
+def resolve_edge_export_policy_metadata(
+    training_config: Any,
+    model_dict: dict[str, Any],
+    *,
+    base_checkpoint: bool,
+    use_ema_weights: bool,
+) -> dict[str, Any] | None:
+    """Resolve Edge policy metadata or validate an explicit base export.
+
+    Base Cosmos3-Edge DCPs are action-capable but are not task-finetuned
+    policies, so their exports intentionally omit ``checkpoint.json.policy``.
+    The explicit flag keeps that omission from hiding a malformed fine-tuning
+    config on the default export path.
+    """
+    is_edge = is_edge_model(model_dict)
+    action_gen = (model_dict.get("config") or {}).get("action_gen")
+
+    if base_checkpoint:
+        if not is_edge:
+            raise ValueError("--base-checkpoint requires a Cosmos3-Edge model config.")
+        if action_gen is not True:
+            raise ValueError("--base-checkpoint requires model.config.action_gen=true.")
+        if use_ema_weights:
+            raise ValueError("--base-checkpoint requires regular weights; pass --no-use-ema-weights.")
+        return None
+
+    if is_edge and action_gen:
+        return build_edge_policy_metadata(training_config)
+    return None
+
+
 def reasoner_vision_capable(model_dict: dict[str, Any]) -> bool:
     """Whether the checkpoint being exported can serve reasoner image/video prompts.
 

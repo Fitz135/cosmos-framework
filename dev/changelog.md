@@ -28,6 +28,24 @@ Use this template:
 - **Validation**: ...
 ```
 
+## DEV-0017 — 2026-08-19 03:12 +08:00 — Correct LIBERO Base policy identity
+
+- **Area**: Cosmos3-Edge LIBERO checkpoint loading, Base action-policy export,
+  and strict server/job provenance.
+- **Summary**: Excluded the framework's implicit default config from the
+  server-side profile identity while retaining explicit external configs, and
+  added an explicit regular-only Base Edge export mode that omits fine-tuning
+  policy metadata. Corrected the formal Base target from the native public
+  reasoner/vision snapshot to a self-contained Cosmos3 Omni action HF export
+  derived from the Base DCP.
+- **Documentation**: Added the Base action export command and clarified the
+  roles of the Base DCP, relocated config, public processor/vision snapshot,
+  and final HF policy artifact. Recorded the two deterministic defects exposed
+  by the non-promotable `v4` H200 smoke.
+- **Validation**: The combined LIBERO evaluation, action-server profile, and
+  export suites passed 197 tests; Ruff lint and format checks passed; focused
+  Pyrefly reported 0 errors (4 suppressed); `git diff --check` passed.
+
 ## DEV-0016 — 2026-08-19 02:42 +08:00 — Harden LIBERO policy startup identity
 
 - **Area**: Cosmos3-Edge LIBERO policy-server startup and HF checkpoint

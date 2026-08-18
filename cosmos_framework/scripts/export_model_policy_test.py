@@ -10,6 +10,7 @@ import pytest
 from cosmos_framework.scripts._export_model_helpers import (
     build_edge_policy_metadata,
     canonicalize_edge_local_processor,
+    resolve_edge_export_policy_metadata,
 )
 
 
@@ -24,6 +25,16 @@ def _dataset(*, chunk_length=8, fps=10, embodiment_type="libero"):
 
 def _defaulted_dataset(*, chunk_length=8, fps=10, embodiment_type="libero"):
     del chunk_length, fps, embodiment_type
+
+
+def _model_dict(*, edge=True, action_gen=True):
+    model_name = "nvidia/Cosmos3-Edge-Reasoner" if edge else "Qwen/Qwen3-VL-8B-Instruct"
+    return {
+        "config": {
+            "action_gen": action_gen,
+            "vlm_config": {"model_name": model_name},
+        }
+    }
 
 
 def test_build_edge_policy_metadata_from_packing_dataloader():
@@ -118,6 +129,55 @@ def test_build_edge_policy_metadata_rejects_mixed_policy_values():
 
     with pytest.raises(ValueError, match="disagree on `action_chunk_size`"):
         build_edge_policy_metadata(training_config)
+
+
+def test_resolve_edge_export_policy_metadata_skips_explicit_base():
+    assert (
+        resolve_edge_export_policy_metadata(
+            None,
+            _model_dict(),
+            base_checkpoint=True,
+            use_ema_weights=False,
+        )
+        is None
+    )
+
+
+def test_resolve_edge_export_policy_metadata_rejects_base_ema():
+    with pytest.raises(ValueError, match="requires regular weights"):
+        resolve_edge_export_policy_metadata(
+            None,
+            _model_dict(),
+            base_checkpoint=True,
+            use_ema_weights=True,
+        )
+
+
+@pytest.mark.parametrize(
+    ("model_dict", "message"),
+    [
+        (_model_dict(edge=False), "requires a Cosmos3-Edge"),
+        (_model_dict(action_gen=False), "requires model.config.action_gen=true"),
+    ],
+)
+def test_resolve_edge_export_policy_metadata_rejects_invalid_base(model_dict, message):
+    with pytest.raises(ValueError, match=message):
+        resolve_edge_export_policy_metadata(
+            None,
+            model_dict,
+            base_checkpoint=True,
+            use_ema_weights=False,
+        )
+
+
+def test_resolve_edge_export_policy_metadata_keeps_finetune_validation_strict():
+    with pytest.raises(ValueError, match="dataloader_train.dataloader.datasets"):
+        resolve_edge_export_policy_metadata(
+            SimpleNamespace(dataloader_train={}),
+            _model_dict(),
+            base_checkpoint=False,
+            use_ema_weights=False,
+        )
 
 
 def test_canonicalize_edge_local_processor_scrubs_export_host_path(tmp_path):

@@ -110,6 +110,17 @@ def test_action_server_disables_generic_guardrails() -> None:
     assert setup_overrides.guardrails is False
 
 
+@pytest.mark.parametrize("config_file", [None, server.DEFAULT_CONFIG_FILE, Path(server.DEFAULT_CONFIG_FILE)])
+def test_implicit_default_config_does_not_enter_profile_identity(config_file: str | Path | None) -> None:
+    assert server._profile_identity_config_path(config_file) is None
+
+
+def test_explicit_external_config_enters_profile_identity(tmp_path: Path) -> None:
+    config_file = tmp_path / "external-config.yaml"
+
+    assert server._profile_identity_config_path(config_file) == str(config_file)
+
+
 def _patch_cpu_preprocessing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         server,

@@ -53,7 +53,6 @@ from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
 from cosmos_framework.scripts._export_model_helpers import (
     EDGE_VIT_BUNDLE_HF_INCLUDE,
     build_artifact_source,
-    build_edge_policy_metadata,
     build_export_manifest,
     bundle_processor_files,
     bundle_processor_from_tokenizer_node,
@@ -64,6 +63,7 @@ from cosmos_framework.scripts._export_model_helpers import (
     is_edge_model,
     read_framework_commit,
     reasoner_vision_capable,
+    resolve_edge_export_policy_metadata,
     resolve_vision_bundle_dirs,
     sanitize_export_args,
     set_include_visual,
@@ -98,6 +98,11 @@ class Args(ParallelismOverrides):
     """Output model directory."""
     config_only: bool = False
     """If True, only export config."""
+    base_checkpoint: bool = False
+    """Export an action-capable base Edge checkpoint without fine-tuned policy metadata.
+
+    Requires a Cosmos3-Edge model with ``action_gen=true`` and regular weights.
+    """
     student_only_checkpoint_metadata: bool = False
     """If True, omit source checkpoint and credential paths from checkpoint metadata."""
     vit: bool = True
@@ -296,14 +301,16 @@ def export_model(args: Args) -> None:
     model_dict["config"]["ema"]["enabled"] = False
 
     is_edge = is_edge_model(model_dict)
-    # Cosmos3 Edge action policies need the diffusers converter's `policy` block
-    # (action_chunk_size / conditioning_fps / domain_name) in checkpoint.json.
-    # Only action Edge models carry an action dataloader; non-action Edge exports
-    # (e.g. Edge SFT video recipes) skip this and stay unaffected.
-    edge_policy_metadata = (
-        build_edge_policy_metadata(checkpoint_args.load_config_dict())
-        if is_edge and model_dict["config"].get("action_gen")
-        else None
+    # Fine-tuned Cosmos3-Edge action policies require the diffusers converter's
+    # `policy` block (action_chunk_size / conditioning_fps / domain_name) in
+    # checkpoint.json. Base Edge is action-capable too, so omitting that block
+    # must be explicit rather than inferred from a missing dataloader config.
+    needs_policy_config = is_edge and bool(model_dict["config"].get("action_gen")) and not args.base_checkpoint
+    edge_policy_metadata = resolve_edge_export_policy_metadata(
+        checkpoint_args.load_config_dict() if needs_policy_config else None,
+        model_dict,
+        base_checkpoint=args.base_checkpoint,
+        use_ema_weights=checkpoint_args.use_ema_weights,
     )
     if not args.vit:
         # Text/gen-only export: write include_visual=False into the exported model
@@ -461,6 +468,7 @@ def export_model(args: Args) -> None:
     # Write the provenance sidecar (kept separate from 'checkpoint.json', whose
     # schema is checkpoint_args.model_dump).
     export_args: dict[str, Any] = {
+        "base_checkpoint": args.base_checkpoint,
         "config_only": args.config_only,
         "student_only_checkpoint_metadata": args.student_only_checkpoint_metadata,
         "verify": args.verify,

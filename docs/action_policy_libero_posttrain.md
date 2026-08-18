@@ -213,7 +213,7 @@ TARGET_ADAPTER="$PWD/cosmos_framework/evaluation/libero/profiles/edge_libero_tar
 
 | Checkpoint | Required job flags | Interpretation |
 | ---------- | ------------------ | -------------- |
-| Base Cosmos3-Edge HF regular | `--checkpoint-path <BASE_EDGE_HF> --target-adapter-path "$TARGET_ADAPTER" --weights-variant regular` | Explicit zero-shot LIBERO diagnostic. Report `checkpoint_role=base, zero_shot=true`; never describe it as a fine-tuned policy. |
+| Base Cosmos3-Edge action HF regular | `--checkpoint-path <BASE_EDGE_ACTION_HF> --target-adapter-path "$TARGET_ADAPTER" --weights-variant regular` | Explicit zero-shot LIBERO diagnostic. Report `checkpoint_role=base, zero_shot=true`; never describe it as a fine-tuned policy. |
 | 5k fine-tuned Edge HF EMA | `--checkpoint-path <EDGE_5K_EMA_HF> --target-adapter-path "$TARGET_ADAPTER" --weights-variant ema` | Fine-tuned EMA checkpoint at iteration 5000. |
 | 10k fine-tuned Edge HF EMA | `--checkpoint-path <EDGE_10K_EMA_HF> --target-adapter-path "$TARGET_ADAPTER" --weights-variant ema` | Fine-tuned EMA checkpoint at iteration 10000. |
 
@@ -224,6 +224,28 @@ resume. The fine-tuned exports still need the target adapter when their
 `checkpoint.json.policy` contains only the training-native chunk/FPS/domain
 fields. `--policy-profile-path` is reserved for an explicit complete profile;
 duplicate sources must agree exactly.
+
+The public `Cosmos3-Edge-hf` snapshot is the Transformers reasoner/vision
+source, not a directly loadable Cosmos3 Omni action-policy export. Build the
+formal Base target from the converted action DCP with an explicitly relocated
+config and the public snapshot as the processor/vision source:
+
+```bash
+python -m cosmos_framework.scripts.export_model \
+  --checkpoint-path <BASE_EDGE_DCP>/model \
+  --config-file <RELOCATED_BASE_EDGE_CONFIG_JSON> \
+  --no-use-ema-weights \
+  --base-checkpoint \
+  --vit-checkpoint-path <PUBLIC_BASE_EDGE_HF> \
+  -o <BASE_EDGE_ACTION_HF>
+```
+
+`--base-checkpoint` is deliberately explicit: it accepts only an Edge action
+model with regular weights and omits fine-tuning policy metadata, so the
+LIBERO resolver classifies the export as Base and requires the target adapter.
+The relocated config must change only unavailable processor/VAE paths and be
+retained with source and derived hashes. Do not pass the public snapshot itself
+to the action-policy job.
 
 DCP is a source/debug format, not one of the formal three comparison targets.
 A fine-tuned DCP requires its matching resolved `--config-file`, the adapter,
