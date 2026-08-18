@@ -29,6 +29,7 @@ from torch.distributed._tensor.api import DTensor
 from cosmos_framework.utils import distributed, log
 from cosmos_framework.utils.distributed import all_gather_tensor
 from cosmos_framework.utils.easy_io import easy_io
+from cosmos_framework.utils.rng import mt19937_seed_key
 from cosmos_framework.utils.timer import Timer
 
 
@@ -150,13 +151,14 @@ def arch_invariant_rand(
         shape (list or tuple of ints): Output tensor shape.
         dtype (torch.dtype): Output tensor type.
         device (torch.device): Device holding the output.
-        seed (int): Optional randomization seed.
+        seed (int): Optional non-negative signed-63-bit logical seed. Values
+            above uint32 are adapted to a two-word MT19937 key.
 
     Returns:
         tensor (torch.tensor): Randomly-generated tensor.
     """
     # Create a random number generator, optionally seeded
-    rng = np.random.RandomState(seed)
+    rng = np.random.RandomState(mt19937_seed_key(seed))
 
     # Generate random numbers using the generator
     random_array = rng.standard_normal(shape).astype(np.float32)  # Use standard_normal for normal distribution
@@ -647,7 +649,11 @@ class StragglerDetectorV2:
 
                 import cosmos_framework.utils.launch
 
-                if cosmos_framework.utils.launch.S3_READY and (iteration % (5 * self.report_freq) == 0) and self.save_s3:
+                if (
+                    cosmos_framework.utils.launch.S3_READY
+                    and (iteration % (5 * self.report_freq) == 0)
+                    and self.save_s3
+                ):
                     easy_io.dump(
                         wandb_info,
                         f"s3://rundir/{self.__class__.__name__}/iter_{iteration:09d}.yaml",

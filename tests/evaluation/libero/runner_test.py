@@ -42,6 +42,8 @@ from cosmos_framework.evaluation.libero.runner import (
     validate_completion_marker,
 )
 from cosmos_framework.evaluation.libero.schema import LiberoCheckpointProfile
+from cosmos_framework.evaluation.libero.seeding import SAMPLING_SEED_CONTRACT
+from cosmos_framework.utils.rng import SIGNED_63_MAX
 
 pytestmark = pytest.mark.level(0)
 
@@ -80,8 +82,16 @@ def _profile(**overrides: Any) -> LiberoCheckpointProfile:
     return LiberoCheckpointProfile.model_validate(values)
 
 
-def _info(profile: LiberoCheckpointProfile | None = None, *, protocol: str = PROTOCOL_VERSION) -> dict[str, Any]:
-    result: dict[str, Any] = {"protocol_version": protocol}
+def _info(
+    profile: LiberoCheckpointProfile | None = None,
+    *,
+    protocol: str = PROTOCOL_VERSION,
+    sampling_seed_contract: str | None = SAMPLING_SEED_CONTRACT,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "protocol_version": protocol,
+        "sampling_seed_contract": sampling_seed_contract,
+    }
     if profile is not None:
         result["policy_profile"] = profile.model_dump(mode="json")
     return result
@@ -106,11 +116,22 @@ def test_handshake_reads_only_versioned_policy_profile() -> None:
 
     assert handshake.profile == profile
     assert handshake.server_info["protocol_version"] == PROTOCOL_VERSION
+    assert handshake.server_info["sampling_seed_contract"] == SAMPLING_SEED_CONTRACT
 
     with pytest.raises(RunnerProtocolError, match="protocol_version"):
         parse_policy_handshake(_info(profile, protocol="legacy"))
+    with pytest.raises(RunnerProtocolError, match="sampling_seed_contract"):
+        parse_policy_handshake(_info(profile, sampling_seed_contract=None))
+    with pytest.raises(RunnerProtocolError, match="sampling_seed_contract"):
+        parse_policy_handshake(_info(profile, sampling_seed_contract="python-hash"))
     with pytest.raises(RunnerProtocolError, match="policy_profile"):
-        parse_policy_handshake({"protocol_version": PROTOCOL_VERSION, "action_chunk_size": 8})
+        parse_policy_handshake(
+            {
+                "protocol_version": PROTOCOL_VERSION,
+                "sampling_seed_contract": SAMPLING_SEED_CONTRACT,
+                "action_chunk_size": 8,
+            }
+        )
     with pytest.raises(RunnerProtocolError, match="gripper_mode"):
         parse_policy_handshake(_info(_profile(gripper_mode="passthrough")))
     with pytest.raises(RunnerProtocolError, match="rotate_images"):
@@ -127,12 +148,12 @@ def test_handshake_reads_only_versioned_policy_profile() -> None:
         parse_policy_handshake(_info(_profile(action_stats_sha256="a" * 64)))
 
 
-def test_decision_seed_is_stable_and_depends_on_full_episode_identity() -> None:
+def test_decision_seed_is_stable_signed63_and_depends_on_full_episode_identity() -> None:
     seed = stable_decision_seed(7, "libero_10", 2, 3, 4)
 
     assert seed == 4432341604508092275
     assert seed == stable_decision_seed(7, "libero_10", 2, 3, 4)
-    assert 0 <= seed <= 2**63 - 1
+    assert 0 <= seed <= SIGNED_63_MAX
     assert (
         len(
             {
@@ -148,6 +169,13 @@ def test_decision_seed_is_stable_and_depends_on_full_episode_identity() -> None:
     )
     with pytest.raises(ValueError, match="decision_index"):
         stable_decision_seed(7, "libero_10", 2, 3, -1)
+
+
+def test_v6_large_seed_regression_preserves_full_decision_identity() -> None:
+    seed = stable_decision_seed(0, "libero_spatial", 0, 0, 0)
+
+    assert seed == 7221137112376841976
+    assert 0 <= seed <= SIGNED_63_MAX
 
 
 def test_episode_seed_is_stable_slot_independent_and_uint32() -> None:
@@ -210,6 +238,9 @@ def test_policy_item_preserves_raw_prompt_and_current_canonical_frame() -> None:
     assert item["seed"] == 123
     decoded = np.asarray(Image.open(io.BytesIO(base64.b64decode(item["image"]))).convert("RGB"))
     np.testing.assert_array_equal(decoded, frame)
+
+    with pytest.raises(ValueError, match=str(SIGNED_63_MAX)):
+        build_policy_item(frame, "pick up the mug", profile, seed=SIGNED_63_MAX + 1)
 
 
 @pytest.mark.parametrize(
@@ -448,6 +479,7 @@ def test_vectorized_state_machine_batches_slots_and_treats_done_without_success_
     np.testing.assert_array_equal(env.step_calls[0][1], np.repeat(np.array([[0, 0, 0, 0, 0, 0, -1]]), 2, 0))
     assert env.step_calls[1][1].shape == (2, 7)
     assert [record["success"] for record in results] == [True, False]
+    assert [record["episode_seed"] for record in results] == env.seed_values[0]
     assert results[1]["termination"] == "done_without_success"
     assert appended == results
 

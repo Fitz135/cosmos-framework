@@ -416,6 +416,22 @@ are fingerprinted exactly once even when the loader discovers them
 automatically. A configuration supplied from outside the checkpoint remains an
 explicit part of the immutable fingerprint.
 
+The `--seed` value is a non-negative signed-63-bit base seed. Protocol
+`cosmos-libero-eval-v2` derives each logical policy seed from canonical JSON of
+the complete suite/task/trial/decision identity and SHA-256. It deliberately
+does not truncate, take modulo, or fold that logical identity to uint32. The
+server advertises, and the runner requires, the exact
+`sampling_seed_contract` value
+`sha256-canonical-json-first64-mask63-v1+mt19937-uint32-identity-or-le-u32-pair-v1`.
+At the NumPy MT19937 boundary, a logical seed through `2**32 - 1` remains the
+same scalar integer, preserving its historical `RandomState` stream; a larger
+seed becomes the lossless low-word-first pair
+`[seed & 0xffffffff, seed >> 32]`. Simulator episode seeds use a separately
+domain-separated uint32 derivation and are recorded as `episode_seed` in each
+episode and infrastructure-attempt record. The schema-v2 manifest stores both
+`base_seed` and the handshake contract, so a seed-contract or protocol change
+requires a new run directory.
+
 Use this promotion ladder; each checkpoint, stage, and suite gets a new run
 directory:
 
@@ -463,16 +479,31 @@ rlaunch \
 ```bash
 rjob submit \
   --name <JOB_NAME> \
+  --group <RESOURCE_GROUP> \
   --charged-group <QUOTA_GROUP> \
+  --private-machine group \
+  --preemptible no \
   --image <EVAL_IMAGE> \
   --replica 1 --gpu 1 --cpu 16 --memory 131072 \
-  --positive-tags <GPU_TAG> \
+  --positive-tags <STORAGE_COMPATIBILITY_TAG> \
+  --custom-resources <SHARED_STORAGE_RESOURCE>=1 \
   --mount <WORKSPACE_MOUNT_URI>:<WORKSPACE_MOUNT_POINT> \
+  --share-host-shm true \
+  --restart-policy never \
+  --backoff_limit 1 \
+  --auto-delete-duration 168h \
   -- bash -lc '<source environment; export EGL, LIBERO, COSMOS_EVAL_IMAGE, and COSMOS_EVAL_JOB_ID; run preflight or job>'
 ```
 
-Do not launch multiple replicas against one run directory. Size CPU and memory
-from the pilot when increasing `--num-envs`.
+Treat `--positive-tags` as a hard selector and use only labels verified by a
+successful compatible job; an inferred accelerator-name tag can exclude the
+very workers it was meant to select. Keep guaranteed jobs non-preemptible with
+the installed CLI's `--preemptible no` spelling. After submission, inspect the
+job plus its concrete replica with `rjob get <JOB_NAME>`,
+`rjob events <REPLICA_NAME> --replica`,
+`rjob logs replica <REPLICA_NAME> -n 200`, or
+`rjob logs job <JOB_NAME> -n 200`. Do not launch multiple replicas against one
+run directory. Size CPU and memory from the pilot when increasing `--num-envs`.
 
 ### 3.5 Nano legacy client
 

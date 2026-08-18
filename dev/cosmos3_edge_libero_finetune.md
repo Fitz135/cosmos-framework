@@ -4,15 +4,16 @@
 
 - Branch: `feature_libero_finetune`
 - Base branch: `feature/cosmos3-edge-libero`
-- Current phase: DEV-0015 strict Cosmos3-Edge LIBERO evaluation.
+- Current phase: DEV-0019 strict Cosmos3-Edge LIBERO evaluation seed protocol.
 - Original 5k training: `cosmos3-edge-libero-full-b128-2361150` succeeded.
 - 10k continuation output: complete `iter_000010000/model` DCP under the
   canonical output root.
 - Formal checkpoints: base Edge HF regular, 5k fine-tuned HF EMA, and 10k
   fine-tuned HF EMA.
 - Locked simulator preflight: passed for the four primary suites.
-- Policy rollout status: smoke, pilot, and full evaluations are pending; no
-  success-rate claim is recorded yet.
+- Policy rollout status: all three `v6` smokes reached the first live policy
+  request but failed at the pre-fix NumPy seed boundary; `v7` is pending, and no
+  smoke, pilot, full, or success-rate claim is recorded yet.
 - Previous real-sample action check: finite `[1, 8, 10]` output from the 5k
   export.
 
@@ -248,6 +249,21 @@ with rotation correction, OSC_POSE at 10 Hz, and `pm_one` gripper semantics.
 Sampling is separate and explicitly recorded with
 `--num-steps 8 --guidance 1.0`.
 
+Protocol `cosmos-libero-eval-v2` also locks sampling-seed semantics. The runner
+derives a logical policy seed from the complete
+`(base_seed, task_suite, task_id, trial_id, decision_index)` identity by
+canonical JSON plus SHA-256, takes the first eight digest bytes as big-endian,
+and clears the sign bit. This signed-63-bit identity is not truncated or folded
+to fit NumPy. At the RNG boundary, values through `2**32 - 1` remain scalar so
+their existing `numpy.random.RandomState` streams stay byte-identical; larger
+values are passed losslessly as the low 32-bit word followed by the high 32-bit
+word. The exact advertised contract is
+`sha256-canonical-json-first64-mask63-v1+mt19937-uint32-identity-or-le-u32-pair-v1`.
+The runner requires an exact `/info.sampling_seed_contract` match and copies it
+to the immutable schema-v2 manifest. Simulator randomness remains separately
+domain-separated: each episode and infrastructure-attempt record includes its
+slot-independent uint32 `episode_seed`.
+
 ### Formal checkpoint matrix
 
 | Target | Current PJLab path | Required flags and interpretation |
@@ -410,6 +426,34 @@ virtualenv launcher symlink while still making relative paths absolute, and
 uses the immutable external 5k config described above. The failed `v5`
 directories are diagnostic evidence only; the corrected smoke uses a new ID.
 
+The `v6` retry from commit `241aa98` proved the corrected runner and checkpoint
+contracts end to end up to the first model call. Jobs
+`c3-libero-base-smoke-0819-v6`, `c3-libero-5k-smoke-0819-v6`, and
+`c3-libero-10k-smoke-0819-v6` each acquired an H200, passed the locked
+four-suite GPU preflight, loaded the intended policy, matched the exact
+profile/fingerprint handshake in the identity table above, retained the
+LIBERO virtualenv, and created its manifest and infrastructure journal. Their
+first `/predict_batch` request used the same deterministic logical seed
+`7221137112376841976`, which the pre-fix model forwarded directly to
+`numpy.random.RandomState`; NumPy rejected it with `ValueError: Seed must be
+between 0 and 2**32 - 1`, and the runner recorded an HTTP-400 policy-server
+infrastructure error. None of these directories contains promotable metrics or
+`_SUCCESS`:
+
+```text
+libero/runs/base-edge-action-hf-regular/smoke-v6-241aa98/libero_spatial/
+libero/runs/edge-5k-hf-ema/smoke-v6-241aa98/libero_spatial/
+libero/runs/edge-10k-hf-ema/smoke-v6-241aa98/libero_spatial/
+```
+
+DEV-0019 retains the collision-resistant signed-63-bit logical identity and
+adds the versioned, lossless MT19937 key adaptation described in the runtime
+contract. Because the protocol and manifest identity changed from v1 to v2,
+the `v6` directories must never be resumed. The `v7` Base, 5k, and 10k jobs
+must use new job and run IDs. They are pending submission; promotion still
+requires a terminal episode, finite `[8,10]` actions, zero unresolved
+infrastructure errors, `metrics.json`, and `_SUCCESS` for each checkpoint.
+
 ### PJLab launch skeletons
 
 The current mount URI is
@@ -430,15 +474,33 @@ rlaunch \
 ```bash
 rjob submit \
   --name <JOB_NAME> \
+  --group evoagi_gpu \
   --charged-group evoagi_gpu \
+  --private-machine group \
+  --preemptible no \
   --image <EVAL_IMAGE> \
   --replica 1 --gpu 1 --cpu 16 --memory 131072 \
-  --positive-tags=feature/gpfs=yes \
-  --custom-resources=brainpp.cn/fuse=1 \
-  --mount=gpfs://gpfs1/evoagi-share/VTLA:/mnt/shared-storage-user/evoagi-share/VTLA \
-  --share-host-shm=True \
-  --env COSMOS_EVAL_IMAGE=<EVAL_IMAGE> COSMOS_EVAL_JOB_ID=<JOB_NAME> \
+  --positive-tags feature/gpfs=yes \
+  --custom-resources brainpp.cn/fuse=1 \
+  --mount gpfs://gpfs1/evoagi-share/VTLA:/mnt/shared-storage-user/evoagi-share/VTLA \
+  --share-host-shm true \
+  --restart-policy never \
+  --backoff_limit 1 \
+  --auto-delete-duration 168h \
   -- bash -lc '<source shared environment; export EGL and LIBERO variables; run preflight or job>'
+```
+
+`--positive-tags` is a hard scheduling selector. The proven private-pool
+contract uses only `feature/gpfs=yes`; adding an inferred `h200` tag excluded
+otherwise compatible H200 workers. It intentionally uses
+`--preemptible no` rather than an unsupported `--gpu-qos` spelling. Inspect the
+job and its concrete replica without changing cluster state:
+
+```bash
+rjob get <JOB_NAME>
+rjob events <REPLICA_NAME> --replica
+rjob logs replica <REPLICA_NAME> -n 200
+rjob logs job <JOB_NAME> -n 200
 ```
 
 The 16-CPU/128-GiB request is a pilot starting point for eight environments,

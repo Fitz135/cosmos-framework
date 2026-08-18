@@ -85,6 +85,7 @@ from cosmos_framework.evaluation.libero.schema import (
     LiberoCheckpointProfile,
     WeightsVariant,
 )
+from cosmos_framework.evaluation.libero.seeding import SAMPLING_SEED_CONTRACT, validate_sampling_seed
 from cosmos_framework.inference.args import OmniSetupArgs, OmniSetupOverrides
 from cosmos_framework.inference.common.args import DEFAULT_CONFIG_FILE, CheckpointOverrides, ConfigFileType, tyro_cli
 from cosmos_framework.inference.common.config import deserialize_config_dict
@@ -107,7 +108,7 @@ ResolvedActionNormalization = Literal["meanstd", "minmax", "quantile", "quantile
 _DURATION_FPS_TEMPLATE = "The video is {duration:.1f} seconds long and is of {fps:.0f} FPS."
 _RESOLUTION_TEMPLATE = "This video is of {height}x{width} resolution."
 
-_PROTOCOL_VERSION = "cosmos-libero-eval-v1"
+_PROTOCOL_VERSION = "cosmos-libero-eval-v2"
 
 
 def _profile_identity_config_path(config_file: str | Path | None) -> str | None:
@@ -798,6 +799,7 @@ class ActionModelService:
         """
         return {
             "protocol_version": _PROTOCOL_VERSION,
+            "sampling_seed_contract": SAMPLING_SEED_CONTRACT,
             "run_name": self.cfg.experiment_name,
             "checkpoint": self.cfg.checkpoint_dir,
             "config_file": str(self.setup_args.config_file),
@@ -856,10 +858,7 @@ class ActionModelService:
         if not isinstance(image_size, int) or image_size <= 0:
             raise ValueError("'image_size' must be a positive integer")
         seed = req.get("seed", self.cfg.seed)
-        if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
-            raise ValueError("'seed' must be a non-negative integer")
-        if seed > 2**63 - 1:
-            raise ValueError("'seed' must fit in a signed 64-bit integer")
+        seed = validate_sampling_seed(seed, name="'seed'")
 
         img_chw_uint8 = _decode_base64_png_to_rgb_uint8(image_b64)
         img_h, img_w = img_chw_uint8.shape[-2:]
@@ -1230,7 +1229,7 @@ class _ActionHandler(BaseHTTPRequestHandler):
                 410,
                 {
                     "error": (
-                        "Legacy single-item policy endpoint is disabled for cosmos-libero-eval-v1; "
+                        "Legacy single-item policy endpoint is disabled for cosmos-libero-eval-v2; "
                         "send {'items': [...]} to /predict_batch (including N=1)."
                     )
                 },

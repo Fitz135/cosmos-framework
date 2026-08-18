@@ -159,7 +159,8 @@ def test_info_exposes_resolved_raw_dim_profile_and_hash() -> None:
     profile = _profile()
     info = _service(profile=profile).get_info()
 
-    assert info["protocol_version"] == "cosmos-libero-eval-v1"
+    assert info["protocol_version"] == "cosmos-libero-eval-v2"
+    assert info["sampling_seed_contract"] == server.SAMPLING_SEED_CONTRACT
     assert info["raw_action_dim"] == profile.effective_action_dim
     assert info["policy_profile"] == profile.model_dump(mode="json")
     assert info["policy_profile"]["profile_hash"] == profile.profile_hash
@@ -200,7 +201,7 @@ def test_json_prompt_is_byte_identical_to_training_parity_builder() -> None:
 
 
 @pytest.mark.parametrize("invalid_seed", [True, -1, 2**63])
-def test_request_seed_rejects_invalid_signed_int64(invalid_seed: object) -> None:
+def test_request_seed_rejects_values_outside_signed63(invalid_seed: object) -> None:
     service = _service()
     request = _request(0)
     request["seed"] = invalid_seed
@@ -230,9 +231,10 @@ def test_batch_forwards_each_validated_per_item_seed(monkeypatch: pytest.MonkeyP
 
     model = _SeedCapturingModel()
     service = _service(model=model)
-    result = service.predict_policy_batch([_request(11), _request(22)])
+    v6_seed = 7221137112376841976
+    result = service.predict_policy_batch([_request(11), _request(v6_seed)])
 
-    assert model.seeds == [11, 22]
+    assert model.seeds == [11, v6_seed]
     assert len(result["actions"]) == 2
     assert result["checkpoint_fingerprint"] == service.profile.checkpoint_fingerprint
 

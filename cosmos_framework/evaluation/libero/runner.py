@@ -44,8 +44,14 @@ from cosmos_framework.evaluation.libero.observation import (
     build_libero_concat_frame,
 )
 from cosmos_framework.evaluation.libero.schema import LiberoCheckpointProfile
+from cosmos_framework.evaluation.libero.seeding import (
+    SAMPLING_SEED_CONTRACT,
+    stable_decision_seed,
+    stable_episode_seed,
+    validate_sampling_seed,
+)
 
-PROTOCOL_VERSION = "cosmos-libero-eval-v1"
+PROTOCOL_VERSION = "cosmos-libero-eval-v2"
 METRICS_FILENAME = "metrics.json"
 EDGE_ACTION_CHUNK_SIZE = 8
 EDGE_ACTION_DIM = 10
@@ -93,6 +99,7 @@ class EpisodeSpec:
 class _ActiveEpisode:
     trial_id: int
     initial_state: np.ndarray
+    episode_seed: int
     observation: Mapping[str, Any] | None = None
     steps: int = 0
     decisions: int = 0
@@ -257,6 +264,11 @@ def parse_policy_handshake(info: Mapping[str, Any]) -> PolicyHandshake:
     protocol = info.get("protocol_version")
     if protocol != PROTOCOL_VERSION:
         raise RunnerProtocolError(f"Expected protocol_version={PROTOCOL_VERSION!r}, got {protocol!r}.")
+    sampling_seed_contract = info.get("sampling_seed_contract")
+    if sampling_seed_contract != SAMPLING_SEED_CONTRACT:
+        raise RunnerProtocolError(
+            f"Expected sampling_seed_contract={SAMPLING_SEED_CONTRACT!r}, got {sampling_seed_contract!r}."
+        )
     raw_profile = info.get("policy_profile")
     if not isinstance(raw_profile, Mapping):
         raise RunnerProtocolError("GET /info must contain an object at 'policy_profile'.")
@@ -266,60 +278,6 @@ def parse_policy_handshake(info: Mapping[str, Any]) -> PolicyHandshake:
         raise RunnerProtocolError(f"Invalid /info.policy_profile: {error}") from error
     validate_edge_policy_profile(profile)
     return PolicyHandshake(profile=profile, server_info=dict(info))
-
-
-def stable_decision_seed(
-    base_seed: int,
-    task_suite: str,
-    task_id: int,
-    trial_id: int,
-    decision_index: int,
-) -> int:
-    """Return a process-independent signed-64-bit policy seed."""
-    integer_fields = {
-        "base_seed": base_seed,
-        "task_id": task_id,
-        "trial_id": trial_id,
-        "decision_index": decision_index,
-    }
-    for name, value in integer_fields.items():
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            raise ValueError(f"{name} must be a non-negative integer, got {value!r}.")
-    if not isinstance(task_suite, str) or not task_suite.strip():
-        raise ValueError("task_suite must be a non-empty string.")
-    payload = json.dumps(
-        {
-            "base_seed": base_seed,
-            "task_suite": task_suite,
-            "task_id": task_id,
-            "trial_id": trial_id,
-            "decision_index": decision_index,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-    ).encode("utf-8")
-    return int.from_bytes(hashlib.sha256(payload).digest()[:8], "big") & (2**63 - 1)
-
-
-def stable_episode_seed(base_seed: int, task_suite: str, task_id: int, trial_id: int) -> int:
-    """Return a slot-independent uint32 seed for one simulator episode."""
-    # Reuse the strict identity validation, while domain-separating simulator
-    # randomness from policy-decision randomness.
-    stable_decision_seed(base_seed, task_suite, task_id, trial_id, 0)
-    payload = json.dumps(
-        {
-            "base_seed": base_seed,
-            "purpose": "libero_environment",
-            "task_suite": task_suite,
-            "task_id": task_id,
-            "trial_id": trial_id,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-    ).encode("utf-8")
-    return int.from_bytes(hashlib.sha256(payload).digest()[:4], "big")
 
 
 def episode_id(task_suite: str, task_id: int, trial_id: int) -> str:
@@ -348,8 +306,7 @@ def build_policy_item(
     validate_edge_policy_profile(profile)
     if not isinstance(task_prompt, str) or not task_prompt.strip():
         raise ValueError("task_prompt must be a non-empty raw task string.")
-    if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed <= 2**63 - 1:
-        raise ValueError(f"seed must be a non-negative signed-64-bit integer, got {seed!r}.")
+    seed = validate_sampling_seed(seed)
     frame = np.asarray(current_concat_frame)
     expected_shape = (EDGE_LIBERO_IMAGE_SIZE, EDGE_LIBERO_IMAGE_SIZE * len(EDGE_LIBERO_CAMERAS), 3)
     if frame.shape != expected_shape or frame.dtype != np.uint8:
@@ -516,6 +473,7 @@ def _episode_record(
         "task_id": task_id,
         "task_description": task_prompt,
         "trial_id": state.trial_id,
+        "episode_seed": state.episode_seed,
         "steps": state.steps,
         "decisions": state.decisions,
         "termination": termination,
@@ -648,16 +606,19 @@ def run_vectorized_state_machine(
         slots = list(range(len(wave)))
         now = time.perf_counter()
         states = {
-            slot: _ActiveEpisode(spec.trial_id, np.asarray(spec.initial_state), started_at=now)
+            slot: _ActiveEpisode(
+                spec.trial_id,
+                np.asarray(spec.initial_state),
+                stable_episode_seed(base_seed, task_suite, task_id, spec.trial_id),
+                started_at=now,
+            )
             for slot, spec in zip(slots, wave, strict=True)
         }
         try:
             # LIBERO maps a seed list positionally to workers. Re-seed every
             # wave from episode identity so compaction during resume cannot
             # change a trial's simulator randomness.
-            environment_seeds = [
-                stable_episode_seed(base_seed, task_suite, task_id, states[slot].trial_id) for slot in slots
-            ]
+            environment_seeds = [states[slot].episode_seed for slot in slots]
             environment_seeds.extend([0] * (num_envs - len(environment_seeds)))
             vector_env.seed(environment_seeds)
         except Exception as error:
@@ -983,10 +944,16 @@ def _infra_record_for_spec(
     task_id: int,
     task_prompt: str,
     trial_id: int,
+    base_seed: int,
     error_type: str,
     error: BaseException | str,
 ) -> dict[str, Any]:
-    state = _ActiveEpisode(trial_id, np.empty(0), started_at=time.perf_counter())
+    state = _ActiveEpisode(
+        trial_id,
+        np.empty(0),
+        stable_episode_seed(base_seed, task_suite, task_id, trial_id),
+        started_at=time.perf_counter(),
+    )
     return _episode_record(
         state,
         task_suite=task_suite,
@@ -1003,8 +970,9 @@ def _manifest(
     args: argparse.Namespace, handshake: PolicyHandshake, task_ids: list[int], max_steps: int
 ) -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "protocol_version": PROTOCOL_VERSION,
+        "sampling_seed_contract": handshake.server_info["sampling_seed_contract"],
         "server_url": args.server_url.rstrip("/"),
         "server_info": handshake.server_info,
         "policy_profile": handshake.profile.model_dump(mode="json"),
@@ -1125,6 +1093,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         task_id=task_id,
                         task_prompt=f"unavailable task {task_id}",
                         trial_id=trial_id,
+                        base_seed=args.seed,
                         error_type="task_metadata",
                         error=error,
                     )
@@ -1140,6 +1109,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         task_id=task_id,
                         task_prompt=task_prompt,
                         trial_id=trial_id,
+                        base_seed=args.seed,
                         error_type="initial_state",
                         error=error,
                     )
@@ -1160,6 +1130,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         task_id=task_id,
                         task_prompt=task_prompt,
                         trial_id=trial_id,
+                        base_seed=args.seed,
                         error_type="initial_state",
                         error=error,
                     )
@@ -1186,6 +1157,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         task_id=task_id,
                         task_prompt=task_prompt,
                         trial_id=spec.trial_id,
+                        base_seed=args.seed,
                         error_type="environment_create",
                         error=error,
                     )
@@ -1228,7 +1200,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--trials", type=int, default=10, help="Trials per selected task")
     parser.add_argument("--num-envs", type=int, default=1, help="Parallel vector environment slots")
     parser.add_argument("--action-horizon", type=int, default=EDGE_ACTION_CHUNK_SIZE)
-    parser.add_argument("--seed", type=int, default=0, help="Base seed for deterministic decision seeds")
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="Base seed for deterministic signed-63-bit logical sampling seeds",
+    )
     parser.add_argument("--max-steps", type=int, default=0, help="0 selects the suite's canonical limit")
     parser.add_argument("--warmup-steps", type=int, default=10)
     parser.add_argument("--mujoco-gl", default="egl", choices=["egl", "osmesa", "glfw"])

@@ -28,6 +28,32 @@ Use this template:
 - **Validation**: ...
 ```
 
+## DEV-0019 — 2026-08-19 04:26 +08:00 — Version LIBERO policy sampling seeds
+
+- **Area**: LIBERO deterministic policy sampling, server/runner protocol
+  identity, durable episode provenance, and scheduled H200 smoke execution.
+- **Summary**: Preserved canonical SHA-256-derived signed-63-bit logical policy
+  seeds instead of truncating them to uint32, and adapted the RNG boundary with
+  a lossless MT19937 key contract: existing uint32 seeds remain scalar while
+  larger seeds become low-word-first uint32 pairs. Bumped the strict protocol to
+  `cosmos-libero-eval-v2`, made the exact
+  `sha256-canonical-json-first64-mask63-v1+mt19937-uint32-identity-or-le-u32-pair-v1`
+  contract part of the `/info` handshake and schema-v2 run manifest, and
+  recorded the slot-independent simulator `episode_seed` in every episode and
+  infrastructure-attempt record.
+- **Documentation**: Defined the v2 logical-seed and MT19937-key semantics,
+  synchronized the proven single-replica private-pool `rjob` flags and
+  monitoring commands, and recorded the three non-promotable `v6` failures and
+  the fresh-directory requirement for the pending `v7` retry.
+- **Validation**: The full LIBERO-related suite passed 145 tests; Ruff lint and
+  format checks passed; focused Pyrefly reported 0 errors (9 suppressed);
+  `git diff --check` passed; and a non-documentation/development grep found no
+  remaining v1 protocol reference. The three `v6` H200 jobs passed the locked
+  four-suite EGL preflight, loaded their intended models, and matched their
+  strict profile/fingerprint handshakes before consistently exposing the
+  pre-fix NumPy seed-range failure. The `v7` H200 retry has not yet been
+  submitted, so no smoke success is claimed.
+
 ## DEV-0018 — 2026-08-19 03:55 +08:00 — Make LIBERO runtime artifacts portable
 
 - **Area**: LIBERO runner environment selection, Edge HF export publication,
