@@ -61,6 +61,7 @@ from cosmos_framework.scripts._export_model_helpers import (
     clean_stale_export_artifacts,
     constant_image_failure,
     is_edge_model,
+    normalize_export_permissions,
     read_framework_commit,
     reasoner_vision_capable,
     resolve_edge_export_policy_metadata,
@@ -497,6 +498,11 @@ def export_model(args: Args) -> None:
     if edge_policy_metadata is not None:
         checkpoint_metadata["policy"] = edge_policy_metadata
     serialize_config_dict(checkpoint_metadata, args.output_dir / "checkpoint.json")
+
+    # Exports often run as root inside an rjob container while evaluation runs
+    # as the workspace user. Publish every completed artifact with deterministic
+    # cross-user read/traverse permissions before reporting success or verifying.
+    normalize_export_permissions(args.output_dir)
 
     print(f"Saved model to {args.output_dir}")
 

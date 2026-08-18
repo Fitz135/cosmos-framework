@@ -253,7 +253,7 @@ Sampling is separate and explicitly recorded with
 | Target | Current PJLab path | Required flags and interpretation |
 | ------ | ------------------- | --------------------------------- |
 | Base Edge action HF regular | `/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/output/cosmos-framework-eval/checkpoints/cosmos3-edge-base-regular-hf` | Exported from the Base action DCP with `--base-checkpoint`; adapter plus `--weights-variant regular`; explicit zero-shot diagnostic only. |
-| 5k fine-tune HF EMA | `/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/model/cosmos3-edge-libero-all-10fps/export-final-iter5000` | Adapter plus `--weights-variant ema`; formal 5k fine-tuned target. |
+| 5k fine-tune HF EMA | `/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/model/cosmos3-edge-libero-all-10fps/export-final-iter5000` | External config `.../output/cosmos-framework-eval/checkpoints/cosmos3-edge-libero-5k-ema-runtime/config.json`, adapter, and `--weights-variant ema`; formal 5k fine-tuned target. |
 | 10k fine-tune HF EMA | `/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/output/cosmos-framework-eval/checkpoints/cosmos3-edge-libero-10k-ema` | Adapter plus `--weights-variant ema`; formal 10k fine-tuned target. |
 
 The public `/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/model/Cosmos3-Edge-hf`
@@ -264,12 +264,25 @@ LIBERO action server. The Base action source is
 `/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/model/Cosmos3-Edge-dcp/model`;
 its relocated config and provenance manifest live in
 `/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/output/cosmos-framework-eval/checkpoints/cosmos3-edge-base-regular/`.
+The relocated config source/derived SHA-256 values are
+`ce5c5ee6f18262b84d98033a1a754dfe5bef9d9dab535f8ffc8bd0ad4fdff993`
+and `199490774b7bf22a2ce64414153a42179d93804f92ee27a4d94d55ed4d765a05`.
+Rjob `c3-libero-base-export-0819-v1` produced the self-contained HF export
+from commit `1c6382b`; `c3-libero-base-perms-0819-v1` performed the one-time
+permission repair before resolver acceptance.
 
 Both fine-tuned exports contain only their selected EMA weights. Their
 `checkpoint.json.policy` records training-native policy fields; the target
 adapter supplies the remaining evaluation semantics. HF fingerprints include
 safetensors, load-critical configuration and processor/tokenizer assets, plus
 an explicit external config when one is supplied.
+
+The 5k export's embedded config retained one unavailable GPFS2 VAE path. The
+original checkpoint remains unchanged; its external runtime config relocates
+only that path to the existing GPFS1 VAE. The source and derived config hashes
+are `6f96c4b50598516df70502d5378f296da89aab8bd205d10a8e4b00c26804eede`
+and `cbabe664997adfc7b9326276a2cb7bd1b94d611692ecf5de63322db7d868ebe0`;
+the exact replacement is recorded in the sibling `source_manifest.json`.
 
 DCP remains a source/debug format rather than a formal comparison target. The
 10k source DCP is
@@ -281,19 +294,20 @@ EMA targets are HF exports.
 
 ### Resolved identity evidence
 
-The strict resolver resolved the two fine-tuned comparison targets on
-2026-08-18. The former public-HF Base identity is retained below only as an
-invalidated audit record until the regenerated action export is resolved:
+The strict resolver resolved the final three comparison targets after the Base
+export and 5k runtime-config relocation on 2026-08-19:
 
 | Target | Checkpoint fingerprint | Policy profile hash |
 | ------ | ---------------------- | ------------------- |
-| Base Edge action HF regular | Pending regenerated self-contained export; the former public-HF identity is invalid | Pending regenerated self-contained export |
-| 5k fine-tune HF EMA | `05bd7a37317b1c078951d41fd2a88917aab3f7c563f9b81b777d4858f02656c4` | `4248de2aaf4a229a146b7303f270e51060f6509b5cd52f3dcf550f16e0623f01` |
+| Base Edge action HF regular | `99725010794b9248cdc23f004c74793ac1c7dcaf135e2eae153e423d6b9b5907` | `56a0a43c2775baf6c20aac89a96ab1b305edce1ec685c0447b596243f43a354d` |
+| 5k fine-tune HF EMA plus external config | `7b09f1edfbdc7f50a15bb86dda3cdac7b351b4595f2ad693193aeaa82bea5459` | `fb000cae6eee2fddb7c15b374f920bae50a5dd6fc6478688f4430cf19328cda9` |
 | 10k fine-tune HF EMA | `ca83c3545605e368c30a8a4a89188294d6b6f7ff6d85e73b11cfd8c1dc4a2921` | `b3284d55e4ec80e2ff4c4126b55be5cc75c66aa571509d1c5f1ee90d53c32783` |
 
-The 10k export's two top-level safetensor shards were corrected to mode
-`0644` by a root worker using the same evaluation image, so scheduled
-non-root readers can load the exact fingerprinted export.
+The existing 10k export and the new Base export required one-time root-worker
+permission repair for top-level safetensor shards created as `0600`.
+DEV-0018 makes future exports deterministic and cross-user readable: regular
+files are `0644`, directories are `0755`, symlinks are not followed, and a
+failed normalization removes the `checkpoint.json` completion marker.
 
 ### Locked simulator and assets
 
@@ -384,6 +398,17 @@ from policy identity, preserves every explicit external config, adds an
 explicit regular-only Base export mode, and replaces the invalid Base target
 with a self-contained action HF export derived from the Base DCP. The `v4`
 directories remain diagnostic evidence and are not promotable.
+
+The `v5` retry validated the remaining checkpoint/startup contracts. All three
+jobs acquired H200s and passed the four-suite GPU preflight. Base and 10k loaded
+their models and matched the strict server handshake, including the new Base
+identity. Their runners then failed before environment creation because the job
+resolved `.venv-libero/bin/python` through its symlink to the bare uv base
+interpreter, which lacked the virtualenv site-packages. The 5k server separately
+failed on its embedded unavailable GPFS2 VAE path. DEV-0018 preserves the
+virtualenv launcher symlink while still making relative paths absolute, and
+uses the immutable external 5k config described above. The failed `v5`
+directories are diagnostic evidence only; the corrected smoke uses a new ID.
 
 ### PJLab launch skeletons
 

@@ -312,10 +312,10 @@ def _ensure_port_available(port: int) -> None:
 def _validate_runner_python(args: argparse.Namespace) -> None:
     if args.runner_python is None:
         return
-    candidate = Path(args.runner_python).expanduser()
-    if not candidate.is_absolute():
-        raise ValueError(f"runner_python must resolve to an absolute executable path, got {candidate}")
-    candidate = candidate.resolve()
+    # Keep the selected environment's executable path intact. Virtualenv Python
+    # launchers are commonly symlinks; resolving one would bypass that environment
+    # and run the base interpreter without its site-packages.
+    candidate = Path(args.runner_python).expanduser().absolute()
     if not candidate.is_file() or not os.access(candidate, os.X_OK):
         raise ValueError(f"runner_python is not an executable file: {candidate}")
     args.runner_python = str(candidate)

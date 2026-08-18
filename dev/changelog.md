@@ -28,6 +28,25 @@ Use this template:
 - **Validation**: ...
 ```
 
+## DEV-0018 — 2026-08-19 03:55 +08:00 — Make LIBERO runtime artifacts portable
+
+- **Area**: LIBERO runner environment selection, Edge HF export publication,
+  and 5k checkpoint runtime provenance.
+- **Summary**: Preserved virtualenv Python launcher symlinks so the simulator
+  runner keeps its environment site-packages; normalized completed HF exports
+  to cross-user `0644` files and `0755` directories without following symlinks,
+  removing the completion marker on failure; and pinned a hashed external 5k
+  config that relocates its sole unavailable VAE path without modifying the
+  checkpoint.
+- **Documentation**: Recorded the final Base and 5k identities, Base export and
+  permission jobs, the explicit 5k load-config contract, and the two runtime
+  defects exposed by the non-promotable `v5` H200 smoke.
+- **Validation**: The combined LIBERO evaluation, action-server profile, and
+  export suites passed 204 tests; Ruff lint and format checks passed; focused
+  Pyrefly reported 0 errors; `git diff --check` passed. The real Base export
+  resolved as HF/base/regular after cross-user permission repair, and the
+  derived 5k config resolved as HF/finetuned/EMA with its new fingerprint.
+
 ## DEV-0017 — 2026-08-19 03:12 +08:00 — Correct LIBERO Base policy identity
 
 - **Area**: Cosmos3-Edge LIBERO checkpoint loading, Base action-policy export,

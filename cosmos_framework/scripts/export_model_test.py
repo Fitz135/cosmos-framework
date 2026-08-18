@@ -7,8 +7,10 @@ constant-image heuristic) and the Edge checkpoint registry entry. GPU/download p
 exercised by the e2e validation, not here."""
 
 import json
+import os
 import re
 import shutil
+import stat
 
 import numpy as np
 import pytest
@@ -495,6 +497,83 @@ class TestCleanStaleExportArtifacts:
         output_dir.mkdir()
         assert helpers.clean_stale_export_artifacts(output_dir) == []
         assert list(output_dir.iterdir()) == []
+
+
+class TestNormalizeExportPermissions:
+    @staticmethod
+    def _mode(path):
+        return stat.S_IMODE(path.stat().st_mode)
+
+    def test_normalizes_regular_files_and_directories_without_following_symlinks(self, tmp_path):
+        output_dir = tmp_path / "out"
+        nested_dir = output_dir / "processor" / "nested"
+        nested_dir.mkdir(parents=True)
+        files = [
+            output_dir / "config.json",
+            output_dir / "checkpoint.json",
+            output_dir / "export_manifest.json",
+            output_dir / "model.safetensors.index.json",
+            output_dir / "model-00001-of-00002.safetensors",
+            nested_dir / "tokenizer.json",
+        ]
+        for path in files:
+            path.write_text("artifact")
+            path.chmod(0o600)
+        output_dir.chmod(0o700)
+        (output_dir / "processor").chmod(0o700)
+        nested_dir.chmod(0o700)
+
+        outside_dir = tmp_path / "outside"
+        outside_dir.mkdir()
+        outside_file = outside_dir / "private.safetensors"
+        outside_file.write_text("private")
+        outside_dir.chmod(0o700)
+        outside_file.chmod(0o600)
+        (output_dir / "linked-file").symlink_to(outside_file)
+        (output_dir / "linked-dir").symlink_to(outside_dir, target_is_directory=True)
+
+        helpers.normalize_export_permissions(output_dir)
+
+        assert self._mode(output_dir) == 0o755
+        assert self._mode(output_dir / "processor") == 0o755
+        assert self._mode(nested_dir) == 0o755
+        assert all(self._mode(path) == 0o644 for path in files)
+        assert (output_dir / "linked-file").is_symlink()
+        assert (output_dir / "linked-dir").is_symlink()
+        assert self._mode(outside_dir) == 0o700
+        assert self._mode(outside_file) == 0o600
+
+    def test_rejects_symlink_export_root(self, tmp_path):
+        target = tmp_path / "target"
+        target.mkdir()
+        target.chmod(0o700)
+        output_link = tmp_path / "out"
+        output_link.symlink_to(target, target_is_directory=True)
+
+        with pytest.raises(ValueError, match="symlink export root"):
+            helpers.normalize_export_permissions(output_link)
+
+        assert self._mode(target) == 0o700
+
+    def test_permission_failure_propagates(self, tmp_path, monkeypatch):
+        output_dir = tmp_path / "out"
+        output_dir.mkdir()
+        blocked_file = output_dir / "model.safetensors"
+        blocked_file.write_bytes(b"weights")
+        completion_marker = output_dir / "checkpoint.json"
+        completion_marker.write_text("complete")
+        real_fchmod = os.fchmod
+
+        def failing_fchmod(descriptor, mode):
+            if mode == 0o644:
+                raise PermissionError("read-only filesystem")
+            return real_fchmod(descriptor, mode)
+
+        monkeypatch.setattr(os, "fchmod", failing_fchmod)
+
+        with pytest.raises(PermissionError, match="read-only filesystem"):
+            helpers.normalize_export_permissions(output_dir)
+        assert not completion_marker.exists()
 
 
 class TestSanitizeExportArgs:

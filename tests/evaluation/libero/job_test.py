@@ -639,6 +639,66 @@ def test_generated_runner_command_parses_with_runner_cli_and_optional_server_fla
     assert parsed.action_horizon == args.action_horizon
 
 
+def test_runner_python_preserves_virtualenv_symlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args, _checkpoint = _args(tmp_path, monkeypatch)
+    interpreter = tmp_path / "runtime" / "python3.13"
+    interpreter.parent.mkdir()
+    interpreter.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    interpreter.chmod(0o755)
+    runner_python = tmp_path / "libero-env" / "bin" / "python"
+    runner_python.parent.mkdir(parents=True)
+    runner_python.symlink_to(interpreter)
+    args.runner_python = str(runner_python)
+
+    job._validate_job_args(args)
+    runner_command = job.build_runner_command(args, args.output_dir, "http://127.0.0.1:8123")
+
+    assert runner_command[0] == str(runner_python.absolute())
+    assert Path(runner_command[0]).is_symlink()
+    assert Path(runner_command[0]).resolve() == interpreter.resolve()
+
+
+def test_relative_runner_python_becomes_absolute_without_dereferencing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args, _checkpoint = _args(tmp_path, monkeypatch)
+    caller_dir = tmp_path / "caller"
+    runner_python = caller_dir / "libero-env" / "bin" / "python"
+    runner_python.parent.mkdir(parents=True)
+    runner_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    runner_python.chmod(0o755)
+    monkeypatch.chdir(caller_dir)
+    args.runner_python = "libero-env/bin/python"
+
+    job._validate_job_args(args)
+
+    assert args.runner_python == str(runner_python.absolute())
+
+
+@pytest.mark.parametrize("invalid_kind", ["non_executable", "directory"])
+def test_runner_python_rejects_non_executable_files_and_directories(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    invalid_kind: str,
+) -> None:
+    args, _checkpoint = _args(tmp_path, monkeypatch)
+    candidate = tmp_path / invalid_kind
+    if invalid_kind == "directory":
+        candidate.mkdir()
+        candidate.chmod(0o755)
+    else:
+        candidate.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        candidate.chmod(0o644)
+    args.runner_python = str(candidate)
+
+    with pytest.raises(ValueError, match="runner_python is not an executable file"):
+        job._validate_job_args(args)
+
+
 def test_dcp_requires_explicit_config_before_server_spawn(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

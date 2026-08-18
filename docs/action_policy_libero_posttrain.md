@@ -214,7 +214,7 @@ TARGET_ADAPTER="$PWD/cosmos_framework/evaluation/libero/profiles/edge_libero_tar
 | Checkpoint | Required job flags | Interpretation |
 | ---------- | ------------------ | -------------- |
 | Base Cosmos3-Edge action HF regular | `--checkpoint-path <BASE_EDGE_ACTION_HF> --target-adapter-path "$TARGET_ADAPTER" --weights-variant regular` | Explicit zero-shot LIBERO diagnostic. Report `checkpoint_role=base, zero_shot=true`; never describe it as a fine-tuned policy. |
-| 5k fine-tuned Edge HF EMA | `--checkpoint-path <EDGE_5K_EMA_HF> --target-adapter-path "$TARGET_ADAPTER" --weights-variant ema` | Fine-tuned EMA checkpoint at iteration 5000. |
+| 5k fine-tuned Edge HF EMA | `--checkpoint-path <EDGE_5K_EMA_HF> --config-file <EDGE_5K_LOAD_CONFIG> --target-adapter-path "$TARGET_ADAPTER" --weights-variant ema` | Fine-tuned EMA checkpoint at iteration 5000. Use the immutable relocated config when the export embeds an unavailable VAE path. |
 | 10k fine-tuned Edge HF EMA | `--checkpoint-path <EDGE_10K_EMA_HF> --target-adapter-path "$TARGET_ADAPTER" --weights-variant ema` | Fine-tuned EMA checkpoint at iteration 10000. |
 
 A self-contained HF directory normally needs no external `--config-file`.
@@ -246,6 +246,18 @@ LIBERO resolver classifies the export as Base and requires the target adapter.
 The relocated config must change only unavailable processor/VAE paths and be
 retained with source and derived hashes. Do not pass the public snapshot itself
 to the action-policy job.
+
+Completed exports publish regular files as `0644` and directories as `0755`
+so a root container can hand the artifact to a non-root evaluator. Symlinks are
+not followed; a permission-normalization failure removes `checkpoint.json`
+rather than leaving a false completion marker.
+
+The same rule applies to older fine-tuned exports: do not edit an immutable HF
+checkpoint in place. If its load config names a storage path unavailable to the
+evaluation worker, create a byte-preserving external config with only that path
+relocated, retain a source/derived hash manifest, and pass it explicitly with
+`--config-file`. The external config content becomes part of the checkpoint
+fingerprint and must be identical on resume.
 
 DCP is a source/debug format, not one of the formal three comparison targets.
 A fine-tuned DCP requires its matching resolved `--config-file`, the adapter,
@@ -355,6 +367,11 @@ smoke for `libero_spatial`, `libero_object`, `libero_goal`, and
 The job uses its own Python for the CUDA policy server and
 `--runner-python` for the simulator. This 10k EMA smoke command makes every
 sampling and rollout choice explicit:
+
+Pass the virtual environment's launcher path itself (for example
+`.venv-libero/bin/python`). The job canonicalizes its location without
+dereferencing the launcher symlink, so Python retains that environment's
+`sys.prefix` and site-packages.
 
 ```bash
 CHECKPOINT=<EDGE_10K_EMA_HF>

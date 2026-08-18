@@ -13,8 +13,10 @@ from __future__ import annotations
 import contextlib
 import inspect
 import json
+import os
 import re
 import shutil
+import stat
 from pathlib import Path
 from pydoc import locate
 from typing import TYPE_CHECKING, Any, Callable
@@ -515,6 +517,74 @@ def clean_stale_export_artifacts(output_dir: Path) -> list[str]:
                 path.unlink()
                 removed.append(path.name)
     return removed
+
+
+def normalize_export_permissions(output_dir: Path) -> None:
+    """Make a completed export readable and traversable by other users.
+
+    Regular files are set to ``0644`` and directories to ``0755``. Symbolic
+    links are never followed or changed, including links to directories outside
+    the export root. A symlink passed as the export root is rejected because
+    normalizing it would otherwise operate on its target.
+
+    Permission errors propagate. If normalization fails after the exporter has
+    written ``checkpoint.json``, that completion marker is removed so an
+    incomplete export cannot be mistaken for a published checkpoint.
+    """
+    root = Path(output_dir)
+    root_stat = root.lstat()
+    if stat.S_ISLNK(root_stat.st_mode):
+        raise ValueError(f"Refusing to normalize permissions through symlink export root '{root}'.")
+    if not stat.S_ISDIR(root_stat.st_mode):
+        raise NotADirectoryError(f"Export root '{root}' is not a directory.")
+
+    def set_mode(path: Path, mode: int, *, directory: bool) -> None:
+        # Linux does not implement os.chmod(..., follow_symlinks=False).
+        # Open with O_NOFOLLOW and chmod the descriptor instead: this both
+        # avoids changing a symlink target and closes the lstat/chmod race.
+        flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+        flags |= os.O_DIRECTORY if directory else os.O_NONBLOCK
+        descriptor = os.open(path, flags)
+        try:
+            opened_stat = os.fstat(descriptor)
+            expected_type = stat.S_ISDIR(opened_stat.st_mode) if directory else stat.S_ISREG(opened_stat.st_mode)
+            if not expected_type:
+                raise OSError(f"Export path '{path}' changed type while normalizing permissions.")
+            os.fchmod(descriptor, mode)
+        finally:
+            os.close(descriptor)
+
+    try:
+        set_mode(root, 0o755, directory=True)
+
+        def raise_walk_error(error: OSError) -> None:
+            raise error
+
+        for current_root, directory_names, file_names in os.walk(root, topdown=True, onerror=raise_walk_error):
+            current_dir = Path(current_root)
+            traversable_directories: list[str] = []
+            for name in directory_names:
+                directory = current_dir / name
+                entry_stat = directory.lstat()
+                if stat.S_ISLNK(entry_stat.st_mode):
+                    continue
+                if stat.S_ISDIR(entry_stat.st_mode):
+                    set_mode(directory, 0o755, directory=True)
+                    traversable_directories.append(name)
+            # Explicitly prune symlink (and raced non-directory) entries so os.walk
+            # cannot descend through them even if platform defaults change.
+            directory_names[:] = traversable_directories
+
+            for name in file_names:
+                file_path = current_dir / name
+                entry_stat = file_path.lstat()
+                if stat.S_ISREG(entry_stat.st_mode):
+                    set_mode(file_path, 0o644, directory=False)
+    except BaseException:
+        # checkpoint.json is the export completion marker. Removing the link
+        # itself is safe even if a corrupt export replaced it with a symlink.
+        (root / "checkpoint.json").unlink(missing_ok=True)
+        raise
 
 
 # A NaN-latent decode yields a uniform frame (JPEG rounding keeps its pixel std
