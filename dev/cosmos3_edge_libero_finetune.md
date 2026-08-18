@@ -4,16 +4,17 @@
 
 - Branch: `feature_libero_finetune`
 - Base branch: `feature/cosmos3-edge-libero`
-- Current phase: DEV-0019 strict Cosmos3-Edge LIBERO evaluation seed protocol.
+- Current phase: DEV-0020 strict Cosmos3-Edge LIBERO gripper-adapter protocol.
 - Original 5k training: `cosmos3-edge-libero-full-b128-2361150` succeeded.
 - 10k continuation output: complete `iter_000010000/model` DCP under the
   canonical output root.
 - Formal checkpoints: base Edge HF regular, 5k fine-tuned HF EMA, and 10k
   fine-tuned HF EMA.
 - Locked simulator preflight: passed for the four primary suites.
-- Policy rollout status: all three `v6` smokes reached the first live policy
-  request but failed at the pre-fix NumPy seed boundary; `v7` is pending, and no
-  smoke, pilot, full, or success-rate claim is recorded yet.
+- Policy rollout status: all three `v7` smokes completed one 8-step model
+  inference but failed at the pre-fix strict `pm_one` range check before the
+  first environment step; `v8` is pending, and no smoke, pilot, full, or
+  success-rate claim is recorded yet.
 - Previous real-sample action check: finite `[1, 8, 10]` output from the 5k
   export.
 
@@ -264,6 +265,31 @@ to the immutable schema-v2 manifest. Simulator randomness remains separately
 domain-separated: each episode and infrastructure-attempt record includes its
 slot-independent uint32 `episode_seed`.
 
+Protocol `cosmos-libero-eval-v3` additionally locks the gripper boundary
+adapter as `pm-one-finite-clamp-v1`. `pm_one` describes the raw command
+convention; it does not guarantee that an unconstrained diffusion sample lies
+inside the actuator range. The committed `quantile_rot` statistics use
+`global_raw.q01[-1] = -1` and `global_raw.q99[-1] = 1`, so the gripper channel's
+inverse affine transform has offset 0 and scale 1. A model-space excursion is
+therefore unchanged by server denormalization. The explicit adapter requires
+finite values, preserves in-range values, and clamps only the gripper channel
+to `[-1, 1]` before `env.step`, matching the legacy `pm_one` behavior. Shape,
+finiteness, pose conversion, and every non-gripper channel remain fail-fast.
+Each episode and infrastructure-attempt record stores
+`gripper_adapter_contract` plus a `gripper_adapter_telemetry` object containing
+`raw_min`, `raw_max`, `generated_value_count`,
+`clipped_generated_value_count`, `clipped_generated_value_rate`, and
+`max_abs_overshoot`. `raw_min` and `raw_max` are measured after server-side
+denormalization and pose conversion but before the simulator-boundary clamp.
+The counts cover every action in each complete generated chunk processed
+before termination, including the unexecuted tail when `action_horizon` is
+shorter than the chunk. Metrics schema 2 places the terminal-episode aggregate
+under `gripper_adapter`; infrastructure attempts remain auditable but are
+excluded. The aggregate rate is
+`sum(clipped_count) / sum(generated_count)`, never the mean of per-episode
+rates. The exact contract is part of the strict handshake and immutable
+schema-3 manifest.
+
 ### Formal checkpoint matrix
 
 | Target | Current PJLab path | Required flags and interpretation |
@@ -318,6 +344,12 @@ export and 5k runtime-config relocation on 2026-08-19:
 | Base Edge action HF regular | `99725010794b9248cdc23f004c74793ac1c7dcaf135e2eae153e423d6b9b5907` | `56a0a43c2775baf6c20aac89a96ab1b305edce1ec685c0447b596243f43a354d` |
 | 5k fine-tune HF EMA plus external config | `7b09f1edfbdc7f50a15bb86dda3cdac7b351b4595f2ad693193aeaa82bea5459` | `fb000cae6eee2fddb7c15b374f920bae50a5dd6fc6478688f4430cf19328cda9` |
 | 10k fine-tune HF EMA | `ca83c3545605e368c30a8a4a89188294d6b6f7ff6d85e73b11cfd8c1dc4a2921` | `b3284d55e4ec80e2ff4c4126b55be5cc75c66aa571509d1c5f1ee90d53c32783` |
+
+These checkpoint fingerprints and profile hashes also remain the policy
+identities for v3. DEV-0020 adds the gripper adapter as a separate exact
+handshake and manifest contract rather than changing checkpoint metadata or
+target semantics. The protocol/manifest change still forbids resuming a v2 run
+directory under v3.
 
 The existing 10k export and the new Base export required one-time root-worker
 permission repair for top-level safetensor shards created as `0600`.
@@ -453,6 +485,38 @@ the `v6` directories must never be resumed. The `v7` Base, 5k, and 10k jobs
 must use new job and run IDs. They are pending submission; promotion still
 requires a terminal episode, finite `[8,10]` actions, zero unresolved
 infrastructure errors, `metrics.json`, and `_SUCCESS` for each checkpoint.
+
+The `v7` retry from commit `b0a6cf3` proved that seed adaptation is effective.
+Jobs `c3-libero-base-smoke-0819-v7`, `c3-libero-5k-smoke-0819-v7`, and
+`c3-libero-10k-smoke-0819-v7` acquired H200 workers, passed the four-suite GPU
+preflight, loaded and handshook their intended v2 profiles, and completed the
+first batch-size-one UniPC inference with eight denoising steps. The measured
+server inference times were 23.644 s for Base, 22.707 s for 5k, and 23.691 s
+for 10k; none reproduced the v6 NumPy seed error.
+
+All three returned action chunks, then failed in the runner's
+`policy_action_adapter` before the first environment step because at least one
+finite gripper value lay materially outside `[-1, 1]`. Each infrastructure
+record has `decisions=1`, `steps=0`, and `episode_seed=2218099160`; none has
+`metrics.json` or `_SUCCESS`. The v7 directories are diagnostic and
+non-promotable:
+
+```text
+libero/runs/base-edge-action-hf-regular/smoke-v7-b0a6cf3/libero_spatial/
+libero/runs/edge-5k-hf-ema/smoke-v7-b0a6cf3/libero_spatial/
+libero/runs/edge-10k-hf-ema/smoke-v7-b0a6cf3/libero_spatial/
+```
+
+The failure is an adapter-contract defect rather than a normalization mismatch.
+For the gripper dimension, the selected `global_raw` q01/q99 values are exactly
+`-1/+1`, making denormalization the identity. The Nano legacy evaluator already
+defines `pm_one` as a finite pass-through with `[-1, 1]` clamping. DEV-0020
+makes that behavior explicit, versioned, and auditable instead of silently
+loosening the strict adapter. Protocol v3/schema 3 requires fresh `v8` job and
+run IDs. Those jobs are pending submission; promotion still requires terminal
+episodes, finite adapted actions, recorded clipping telemetry, zero unresolved
+infrastructure errors, a schema-2 `metrics.json` with count-weighted clipping
+telemetry, and `_SUCCESS` for every checkpoint.
 
 ### PJLab launch skeletons
 

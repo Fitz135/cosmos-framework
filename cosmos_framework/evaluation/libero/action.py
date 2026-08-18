@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -15,6 +16,18 @@ from cosmos_framework.data.generator.action.pose_utils import convert_rotation
 
 EDGE_LIBERO_ACTION_DIM = 10
 LIBERO_ENV_ACTION_DIM = 7
+GRIPPER_ADAPTER_CONTRACT = "pm-one-finite-clamp-v1"
+
+
+@dataclass(frozen=True)
+class PmOneGripperAdapterResult:
+    """Adapted action and audit data for one finite ``pm_one`` clamp."""
+
+    action: np.ndarray
+    raw_min: float
+    raw_max: float
+    clipped_count: int
+    value_count: int
 
 
 def _as_float32_array(value: Any, name: str) -> np.ndarray:
@@ -96,28 +109,31 @@ def framewise_rot6d_to_libero(action: Any) -> np.ndarray:
     return np.ascontiguousarray(converted, dtype=np.float32)
 
 
-def remap_gripper_pm_one(action: Any, *, tolerance: float = 1e-6) -> np.ndarray:
-    """Validate and pass through a LIBERO ``[-1, 1]`` gripper convention.
+def adapt_gripper_pm_one(action: Any) -> PmOneGripperAdapterResult:
+    """Apply the versioned finite-clamp ``pm_one`` simulator contract.
 
-    Only tiny floating-point excursions within ``tolerance`` are clipped. A
-    materially out-of-range value raises instead of silently selecting or
-    applying a different gripper convention.
+    All finite values retain their continuous semantics inside ``[-1, 1]``;
+    only values outside that interval are clipped. Shape and finiteness remain
+    strict so clipping cannot conceal a malformed policy response.
     """
-    if isinstance(tolerance, bool) or not isinstance(tolerance, (int, float)):
-        raise ValueError(f"tolerance must be a finite non-negative number, got {tolerance!r}.")
-    tolerance_float = float(tolerance)
-    if not np.isfinite(tolerance_float) or tolerance_float < 0:
-        raise ValueError(f"tolerance must be a finite non-negative number, got {tolerance!r}.")
-
     array = _as_float32_array(action, "action")
     if array.ndim < 1 or array.size == 0 or array.shape[-1] != LIBERO_ENV_ACTION_DIM:
         raise ValueError(
             f"action must have trailing LIBERO environment dimension {LIBERO_ENV_ACTION_DIM}, got {array.shape}."
         )
     gripper = array[..., -1]
-    if np.any(gripper < -1.0 - tolerance_float) or np.any(gripper > 1.0 + tolerance_float):
-        raise ValueError("pm_one gripper values must lie in [-1, 1].")
-
+    outside = (gripper < -1.0) | (gripper > 1.0)
     result = array.copy()
     result[..., -1] = np.clip(gripper, -1.0, 1.0)
-    return result
+    return PmOneGripperAdapterResult(
+        action=result,
+        raw_min=float(np.min(gripper)),
+        raw_max=float(np.max(gripper)),
+        clipped_count=int(np.count_nonzero(outside)),
+        value_count=int(gripper.size),
+    )
+
+
+def remap_gripper_pm_one(action: Any) -> np.ndarray:
+    """Return only the adapted action for callers that do not need audit data."""
+    return adapt_gripper_pm_one(action).action

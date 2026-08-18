@@ -432,6 +432,31 @@ episode and infrastructure-attempt record. The schema-v2 manifest stores both
 `base_seed` and the handshake contract, so a seed-contract or protocol change
 requires a new run directory.
 
+Protocol `cosmos-libero-eval-v3` also makes gripper adaptation explicit through
+`gripper_adapter_contract=pm-one-finite-clamp-v1`. `gripper_mode=pm_one`
+identifies the raw training convention, while the boundary adapter defines how
+a finite model command reaches LIBERO's bounded actuator. For the committed
+10 FPS statistics,
+the gripper q01/q99 values are exactly `-1/+1`; inverse `quantile_rot`
+normalization therefore leaves that channel unchanged. The adapter preserves
+in-range values and clamps only the gripper channel to `[-1, 1]`, matching the
+legacy evaluator. It does not relax finite/shape checks, pose conversion, or
+non-gripper action validation.
+
+Every episode and infrastructure-attempt record stores
+`gripper_adapter_contract` plus `gripper_adapter_telemetry` with `raw_min`,
+`raw_max`, `generated_value_count`, `clipped_generated_value_count`,
+`clipped_generated_value_rate`, and `max_abs_overshoot`. The raw extrema are
+measured after server-side denormalization and pose conversion but before the
+simulator-boundary clamp. Counts cover every action in each complete generated
+chunk processed before termination, including the tail not executed under a
+shorter `--action-horizon`. Metrics schema 2 aggregates terminal episodes under
+`gripper_adapter`; infrastructure attempts remain auditable but are excluded.
+Its rate is
+`sum(clipped_generated_value_count) / sum(generated_value_count)`, never an
+average of episode rates. The schema-3 manifest records the exact adapter
+contract, so v1/v2 run directories cannot be resumed under v3.
+
 Use this promotion ladder; each checkpoint, stage, and suite gets a new run
 directory:
 
@@ -525,8 +550,9 @@ results; use `preflight` + `job` + `runner` for every Edge result.
   unsupported. Export EMA to HF.
 - **Profile parity is fail-fast** — do not repair camera order, image rotation,
   gripper sign, control frequency, normalization, prompt format, or action
-  dimension with ad hoc runtime flags. Fix the checkpoint metadata or explicit
-  adapter/profile.
+  dimension with ad hoc runtime flags. The versioned finite `pm_one` clamp is
+  the declared simulator-boundary adapter, not a runtime repair. Fix every
+  other mismatch in checkpoint metadata or the explicit adapter/profile.
 - **Primary-suite guarantee** — preflight certifies the four 10-task suites
   listed above, not `libero_90`.
 - **Canonical output only** — arbitrary relative or external output directories

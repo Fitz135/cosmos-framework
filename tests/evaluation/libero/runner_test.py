@@ -8,6 +8,7 @@ import hashlib
 import io
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -15,6 +16,8 @@ import pytest
 from PIL import Image
 
 from cosmos_framework.evaluation.libero import artifacts
+from cosmos_framework.evaluation.libero import runner as libero_runner
+from cosmos_framework.evaluation.libero.action import GRIPPER_ADAPTER_CONTRACT
 from cosmos_framework.evaluation.libero.runner import (
     EDGE_ACTION_CHUNK_SIZE,
     METRICS_FILENAME,
@@ -87,10 +90,12 @@ def _info(
     *,
     protocol: str = PROTOCOL_VERSION,
     sampling_seed_contract: str | None = SAMPLING_SEED_CONTRACT,
+    gripper_adapter_contract: str | None = GRIPPER_ADAPTER_CONTRACT,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
         "protocol_version": protocol,
         "sampling_seed_contract": sampling_seed_contract,
+        "gripper_adapter_contract": gripper_adapter_contract,
     }
     if profile is not None:
         result["policy_profile"] = profile.model_dump(mode="json")
@@ -117,6 +122,7 @@ def test_handshake_reads_only_versioned_policy_profile() -> None:
     assert handshake.profile == profile
     assert handshake.server_info["protocol_version"] == PROTOCOL_VERSION
     assert handshake.server_info["sampling_seed_contract"] == SAMPLING_SEED_CONTRACT
+    assert handshake.server_info["gripper_adapter_contract"] == GRIPPER_ADAPTER_CONTRACT
 
     with pytest.raises(RunnerProtocolError, match="protocol_version"):
         parse_policy_handshake(_info(profile, protocol="legacy"))
@@ -124,11 +130,14 @@ def test_handshake_reads_only_versioned_policy_profile() -> None:
         parse_policy_handshake(_info(profile, sampling_seed_contract=None))
     with pytest.raises(RunnerProtocolError, match="sampling_seed_contract"):
         parse_policy_handshake(_info(profile, sampling_seed_contract="python-hash"))
+    with pytest.raises(RunnerProtocolError, match="gripper_adapter_contract"):
+        parse_policy_handshake(_info(profile, gripper_adapter_contract="pm-one-strict-range-v0"))
     with pytest.raises(RunnerProtocolError, match="policy_profile"):
         parse_policy_handshake(
             {
                 "protocol_version": PROTOCOL_VERSION,
                 "sampling_seed_contract": SAMPLING_SEED_CONTRACT,
+                "gripper_adapter_contract": GRIPPER_ADAPTER_CONTRACT,
                 "action_chunk_size": 8,
             }
         )
@@ -221,6 +230,30 @@ def test_runtime_provenance_is_dependency_injected_and_complete(tmp_path: Path) 
     }
     assert provenance["gpus"] == [{"name": "NVIDIA H100", "driver_version": "570.00"}]
     assert provenance["package_versions"]["libero"] == "test-libero"
+
+
+def test_manifest_versions_and_locks_gripper_adapter_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    profile = _profile()
+    handshake = parse_policy_handshake(_info(profile))
+    monkeypatch.setattr(libero_runner, "collect_runtime_provenance", lambda: {"test": True})
+    args = SimpleNamespace(
+        server_url="http://policy:8000/",
+        task_suite="libero_spatial",
+        trials=1,
+        seed=0,
+        num_envs=1,
+        action_horizon=8,
+        warmup_steps=10,
+        mujoco_gl="egl",
+        render_gpu_device_id=0,
+    )
+
+    manifest = libero_runner._manifest(args, handshake, [0], 220)
+
+    assert manifest["schema_version"] == 3
+    assert manifest["protocol_version"] == "cosmos-libero-eval-v3"
+    assert manifest["gripper_adapter_contract"] == GRIPPER_ADAPTER_CONTRACT
+    assert manifest["server_info"]["gripper_adapter_contract"] == GRIPPER_ADAPTER_CONTRACT
 
 
 def test_policy_item_preserves_raw_prompt_and_current_canonical_frame() -> None:
@@ -434,6 +467,14 @@ class _FailingPolicyClient:
         raise ConnectionError("policy server unavailable")
 
 
+class _OvershootingPolicyClient(_FakePolicyClient):
+    def predict_batch(self, items: list[dict[str, Any]], profile: LiberoCheckpointProfile) -> list[np.ndarray]:
+        chunks = super().predict_batch(items, profile)
+        for chunk in chunks:
+            chunk[:, -1] = [-1.5, -1.0, 0.25, 1.0, 1.5, -2.0, 2.0, 0.0]
+        return chunks
+
+
 def test_vectorized_state_machine_batches_slots_and_treats_done_without_success_as_failure() -> None:
     env = _FakeVectorEnv(
         warmup=True,
@@ -481,7 +522,71 @@ def test_vectorized_state_machine_batches_slots_and_treats_done_without_success_
     assert [record["success"] for record in results] == [True, False]
     assert [record["episode_seed"] for record in results] == env.seed_values[0]
     assert results[1]["termination"] == "done_without_success"
+    assert results[0]["gripper_adapter_contract"] == GRIPPER_ADAPTER_CONTRACT
+    assert results[0]["gripper_adapter_telemetry"] == {
+        "raw_min": -1.0,
+        "raw_max": -1.0,
+        "clipped_generated_value_count": 0,
+        "generated_value_count": 8,
+        "clipped_generated_value_rate": 0.0,
+        "max_abs_overshoot": 0.0,
+    }
     assert appended == results
+
+
+def test_gripper_clamp_telemetry_is_episode_local_and_resume_invariant() -> None:
+    full_env = _FakeVectorEnv(warmup=False, outcomes={0: (1.0, False, {}), 1: (1.0, False, {})})
+    full_records: list[dict[str, Any]] = []
+    run_vectorized_state_machine(
+        vector_env=full_env,
+        policy_client=_OvershootingPolicyClient(),
+        profile=_profile(),
+        task_suite="libero_goal",
+        task_id=4,
+        task_prompt="Open the drawer",
+        episodes=[EpisodeSpec(0, np.zeros(3)), EpisodeSpec(7, np.ones(3))],
+        num_envs=2,
+        base_seed=19,
+        action_horizon=1,
+        max_steps=2,
+        warmup_steps=0,
+        on_episode=lambda record: full_records.append(dict(record)),
+        on_infra_error=lambda record: pytest.fail(f"unexpected infra error: {record}"),
+    )
+
+    resumed_env = _FakeVectorEnv(warmup=False, outcomes={0: (1.0, False, {})})
+    resumed_records: list[dict[str, Any]] = []
+    run_vectorized_state_machine(
+        vector_env=resumed_env,
+        policy_client=_OvershootingPolicyClient(),
+        profile=_profile(),
+        task_suite="libero_goal",
+        task_id=4,
+        task_prompt="Open the drawer",
+        episodes=[EpisodeSpec(7, np.ones(3))],
+        num_envs=1,
+        base_seed=19,
+        action_horizon=1,
+        max_steps=2,
+        warmup_steps=0,
+        on_episode=lambda record: resumed_records.append(dict(record)),
+        on_infra_error=lambda record: pytest.fail(f"unexpected infra error: {record}"),
+    )
+
+    expected = {
+        "raw_min": -2.0,
+        "raw_max": 2.0,
+        "clipped_generated_value_count": 4,
+        "generated_value_count": 8,
+        "clipped_generated_value_rate": 0.5,
+        "max_abs_overshoot": 1.0,
+    }
+    assert full_records[0]["gripper_adapter_telemetry"] == expected
+    assert full_records[1]["gripper_adapter_telemetry"] == expected
+    assert resumed_records[0]["gripper_adapter_telemetry"] == expected
+    assert full_records[1]["gripper_adapter_telemetry"] == resumed_records[0]["gripper_adapter_telemetry"]
+    np.testing.assert_array_equal(full_env.step_calls[0][1][:, -1], [-1.0, -1.0])
+    np.testing.assert_array_equal(resumed_env.step_calls[0][1][:, -1], [-1.0])
 
 
 def test_serial_num_envs_one_uses_the_same_batch_state_machine() -> None:
@@ -608,6 +713,15 @@ def test_run_artifacts_resume_aggregate_and_seal(output_root: Path) -> None:
             "task_id": 0,
             "success": True,
             "infra_error": False,
+            "gripper_adapter_contract": GRIPPER_ADAPTER_CONTRACT,
+            "gripper_adapter_telemetry": {
+                "raw_min": -1.5,
+                "raw_max": 0.5,
+                "clipped_generated_value_count": 1,
+                "generated_value_count": 4,
+                "clipped_generated_value_rate": 0.25,
+                "max_abs_overshoot": 0.5,
+            },
         },
     )
     artifacts.append_episode(
@@ -618,6 +732,15 @@ def test_run_artifacts_resume_aggregate_and_seal(output_root: Path) -> None:
             "task_id": 0,
             "success": False,
             "infra_error": False,
+            "gripper_adapter_contract": GRIPPER_ADAPTER_CONTRACT,
+            "gripper_adapter_telemetry": {
+                "raw_min": -0.5,
+                "raw_max": 2.0,
+                "clipped_generated_value_count": 2,
+                "generated_value_count": 6,
+                "clipped_generated_value_rate": 2 / 6,
+                "max_abs_overshoot": 1.0,
+            },
         },
     )
 
@@ -629,6 +752,16 @@ def test_run_artifacts_resume_aggregate_and_seal(output_root: Path) -> None:
     summary = finalize_run(run_dir, profile_hash="b" * 64)
 
     assert summary["overall"]["success_rate"] == 0.5
+    assert summary["schema_version"] == 2
+    assert summary["gripper_adapter"] == {
+        "contract": GRIPPER_ADAPTER_CONTRACT,
+        "generated_value_count": 10,
+        "clipped_generated_value_count": 3,
+        "clipped_generated_value_rate": 0.3,
+        "raw_min": -1.5,
+        "raw_max": 2.0,
+        "max_abs_overshoot": 1.0,
+    }
     assert json.loads((run_dir / METRICS_FILENAME).read_text()) == summary
     assert (run_dir / METRICS_FILENAME).stat().st_mode & 0o777 == 0o644
     assert artifacts.is_complete(run_dir)
@@ -694,6 +827,16 @@ def test_infra_attempt_is_retryable_and_does_not_seal_or_complete_episode(output
 
     assert artifacts.read_episodes(run_dir) == []
     assert len(artifacts.read_infra_errors(run_dir)) == 1
+    infra_record = artifacts.read_infra_errors(run_dir)[0]
+    assert infra_record["gripper_adapter_contract"] == GRIPPER_ADAPTER_CONTRACT
+    assert infra_record["gripper_adapter_telemetry"] == {
+        "raw_min": None,
+        "raw_max": None,
+        "clipped_generated_value_count": 0,
+        "generated_value_count": 0,
+        "clipped_generated_value_rate": None,
+        "max_abs_overshoot": None,
+    }
     assert prepare_run(run_dir, manifest).completed_episode_ids == frozenset()
     assert not artifacts.is_complete(run_dir)
     with pytest.raises(RunnerInfrastructureError, match="remain retryable"):
@@ -749,6 +892,7 @@ def test_completion_marker_validation_is_strict() -> None:
 
 
 def test_task_id_selection_and_cli_surface() -> None:
+    assert PROTOCOL_VERSION == "cosmos-libero-eval-v3"
     assert parse_task_ids("", num_tasks=3) == [0, 1, 2]
     assert parse_task_ids("2,0", num_tasks=3) == [2, 0]
     with pytest.raises(ValueError, match="duplicates"):

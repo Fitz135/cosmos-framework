@@ -9,6 +9,8 @@ import torch
 
 from cosmos_framework.data.generator.action.pose_utils import convert_rotation
 from cosmos_framework.evaluation.libero.action import (
+    GRIPPER_ADAPTER_CONTRACT,
+    adapt_gripper_pm_one,
     framewise_rot6d_to_libero,
     remap_gripper_pm_one,
     validate_action_chunk,
@@ -90,22 +92,42 @@ def test_framewise_rot6d_supports_one_frame_and_rejects_degenerate_basis() -> No
         framewise_rot6d_to_libero(action)
 
 
-def test_pm_one_adapter_passes_through_and_clips_only_tolerance_noise() -> None:
-    action = np.zeros((3, 7), dtype=np.float32)
-    action[:, -1] = [-1.0, 0.25, 1.0 + 5e-7]
+def test_pm_one_adapter_clamps_all_finite_overshoot_and_reports_diagnostics() -> None:
+    action = np.zeros((5, 7), dtype=np.float32)
+    action[:, -1] = [-1.5, -1.0, 0.25, 1.0, 1.5]
 
-    remapped = remap_gripper_pm_one(action)
+    result = adapt_gripper_pm_one(action)
 
-    np.testing.assert_allclose(remapped[:, -1], [-1.0, 0.25, 1.0], atol=0, rtol=0)
+    assert GRIPPER_ADAPTER_CONTRACT == "pm-one-finite-clamp-v1"
+    np.testing.assert_allclose(result.action[:, -1], [-1.0, -1.0, 0.25, 1.0, 1.0], atol=0, rtol=0)
+    assert result.raw_min == -1.5
+    assert result.raw_max == 1.5
+    assert result.clipped_count == 2
+    assert result.value_count == 5
+    np.testing.assert_array_equal(remap_gripper_pm_one(action), result.action)
     assert action[-1, -1] > 1.0
 
 
-@pytest.mark.parametrize("gripper", [-1.01, 1.01, np.nan, np.inf])
-def test_pm_one_adapter_rejects_invalid_gripper(gripper: float) -> None:
+@pytest.mark.parametrize("gripper", [np.nan, np.inf, -np.inf])
+def test_pm_one_adapter_rejects_nonfinite_gripper(gripper: float) -> None:
     action = np.zeros(7, dtype=np.float32)
     action[-1] = gripper
-    with pytest.raises(ValueError, match=r"finite|\[-1, 1\]"):
+    with pytest.raises(ValueError, match="finite"):
         remap_gripper_pm_one(action)
+
+
+def test_pm_one_adapter_preserves_in_range_values_and_clamps_large_finite_values() -> None:
+    action = np.zeros((2, 2, 7), dtype=np.float32)
+    action[..., -1] = [[-1000.0, -0.2], [0.2, 1000.0]]
+
+    result = adapt_gripper_pm_one(action)
+
+    np.testing.assert_array_equal(result.action[..., -1], np.array([[-1.0, -0.2], [0.2, 1.0]], dtype=np.float32))
+    assert result.raw_min == -1000.0
+    assert result.raw_max == 1000.0
+    assert result.clipped_count == 2
+    assert result.value_count == 4
+    np.testing.assert_array_equal(action[..., -1], np.array([[-1000.0, -0.2], [0.2, 1000.0]], dtype=np.float32))
 
 
 def test_pm_one_adapter_rejects_wrong_action_dimension() -> None:

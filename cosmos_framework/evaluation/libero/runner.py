@@ -20,7 +20,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from functools import lru_cache
 from pathlib import Path
@@ -33,11 +33,13 @@ from pydantic import ValidationError
 
 from cosmos_framework.evaluation.libero import artifacts
 from cosmos_framework.evaluation.libero.action import (
+    GRIPPER_ADAPTER_CONTRACT,
+    PmOneGripperAdapterResult,
+    adapt_gripper_pm_one,
     framewise_rot6d_to_libero,
-    remap_gripper_pm_one,
     validate_action_chunk,
 )
-from cosmos_framework.evaluation.libero.metrics import aggregate_episode_metrics
+from cosmos_framework.evaluation.libero.metrics import aggregate_episode_metrics, aggregate_gripper_adapter_metrics
 from cosmos_framework.evaluation.libero.observation import (
     EDGE_LIBERO_CAMERAS,
     EDGE_LIBERO_IMAGE_SIZE,
@@ -51,7 +53,7 @@ from cosmos_framework.evaluation.libero.seeding import (
     validate_sampling_seed,
 )
 
-PROTOCOL_VERSION = "cosmos-libero-eval-v2"
+PROTOCOL_VERSION = "cosmos-libero-eval-v3"
 METRICS_FILENAME = "metrics.json"
 EDGE_ACTION_CHUNK_SIZE = 8
 EDGE_ACTION_DIM = 10
@@ -96,6 +98,38 @@ class EpisodeSpec:
 
 
 @dataclass
+class _GripperAdapterTelemetry:
+    """Per-episode diagnostics over every generated chunk seen by the adapter."""
+
+    raw_min: float | None = None
+    raw_max: float | None = None
+    clipped_count: int = 0
+    value_count: int = 0
+
+    def update(self, result: PmOneGripperAdapterResult) -> None:
+        self.raw_min = result.raw_min if self.raw_min is None else min(self.raw_min, result.raw_min)
+        self.raw_max = result.raw_max if self.raw_max is None else max(self.raw_max, result.raw_max)
+        self.clipped_count += result.clipped_count
+        self.value_count += result.value_count
+
+    def as_dict(self) -> dict[str, float | int | None]:
+        clipped_rate = self.clipped_count / self.value_count if self.value_count else None
+        max_abs_overshoot = (
+            max(0.0, -1.0 - self.raw_min, self.raw_max - 1.0)
+            if self.raw_min is not None and self.raw_max is not None
+            else None
+        )
+        return {
+            "raw_min": self.raw_min,
+            "raw_max": self.raw_max,
+            "clipped_generated_value_count": self.clipped_count,
+            "generated_value_count": self.value_count,
+            "clipped_generated_value_rate": clipped_rate,
+            "max_abs_overshoot": max_abs_overshoot,
+        }
+
+
+@dataclass
 class _ActiveEpisode:
     trial_id: int
     initial_state: np.ndarray
@@ -104,6 +138,7 @@ class _ActiveEpisode:
     steps: int = 0
     decisions: int = 0
     started_at: float = 0.0
+    gripper_telemetry: _GripperAdapterTelemetry = field(default_factory=_GripperAdapterTelemetry)
 
 
 @dataclass(frozen=True)
@@ -268,6 +303,11 @@ def parse_policy_handshake(info: Mapping[str, Any]) -> PolicyHandshake:
     if sampling_seed_contract != SAMPLING_SEED_CONTRACT:
         raise RunnerProtocolError(
             f"Expected sampling_seed_contract={SAMPLING_SEED_CONTRACT!r}, got {sampling_seed_contract!r}."
+        )
+    gripper_adapter_contract = info.get("gripper_adapter_contract")
+    if gripper_adapter_contract != GRIPPER_ADAPTER_CONTRACT:
+        raise RunnerProtocolError(
+            f"Expected gripper_adapter_contract={GRIPPER_ADAPTER_CONTRACT!r}, got {gripper_adapter_contract!r}."
         )
     raw_profile = info.get("policy_profile")
     if not isinstance(raw_profile, Mapping):
@@ -478,6 +518,8 @@ def _episode_record(
         "decisions": state.decisions,
         "termination": termination,
         "infra_error": infra_error,
+        "gripper_adapter_contract": GRIPPER_ADAPTER_CONTRACT,
+        "gripper_adapter_telemetry": state.gripper_telemetry.as_dict(),
         "elapsed_s": round(max(0.0, time.perf_counter() - state.started_at), 3),
     }
     if infra_error:
@@ -699,9 +741,13 @@ def run_vectorized_state_machine(
                     continue
                 try:
                     libero_actions = framewise_rot6d_to_libero(chunk)
-                    libero_actions = remap_gripper_pm_one(libero_actions)
+                    adapter_result = adapt_gripper_pm_one(libero_actions)
+                    libero_actions = adapter_result.action
                     if libero_actions.shape != (profile.action_chunk_size, LIBERO_ENV_ACTION_DIM):
                         raise ValueError(f"converted action has unexpected shape {libero_actions.shape}")
+                    # Audit the complete generated chunk. This intentionally
+                    # includes any tail beyond the configured action_horizon.
+                    states[slot].gripper_telemetry.update(adapter_result)
                     converted[slot] = libero_actions
                 except Exception as error:
                     finish_infra([slot], "policy_action_adapter", error)
@@ -900,9 +946,10 @@ def finalize_run(run_dir: str | os.PathLike[str], *, profile_hash: str) -> dict[
     infra_metrics = aggregate_episode_metrics(infra_attempts)
     metrics["infrastructure_errors"] = infra_metrics["infrastructure_errors"]
     summary = {
-        "schema_version": 1,
+        "schema_version": 2,
         "protocol_version": PROTOCOL_VERSION,
         "profile_hash": profile_hash,
+        "gripper_adapter": aggregate_gripper_adapter_metrics(episodes),
         **metrics,
     }
     _atomic_json_write(directory / METRICS_FILENAME, summary)
@@ -970,9 +1017,10 @@ def _manifest(
     args: argparse.Namespace, handshake: PolicyHandshake, task_ids: list[int], max_steps: int
 ) -> dict[str, Any]:
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "protocol_version": PROTOCOL_VERSION,
         "sampling_seed_contract": handshake.server_info["sampling_seed_contract"],
+        "gripper_adapter_contract": handshake.server_info["gripper_adapter_contract"],
         "server_url": args.server_url.rstrip("/"),
         "server_info": handshake.server_info,
         "policy_profile": handshake.profile.model_dump(mode="json"),

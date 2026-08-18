@@ -13,6 +13,7 @@ import pytest
 import torch
 
 from cosmos_framework.data.generator.action.action_processing import ActionProcessor
+from cosmos_framework.evaluation.libero.action import GRIPPER_ADAPTER_CONTRACT
 from cosmos_framework.evaluation.libero.prompt import build_libero_json_prompt
 from cosmos_framework.evaluation.libero.schema import LiberoCheckpointProfile
 from cosmos_framework.scripts import action_policy_server_libero as server
@@ -159,8 +160,9 @@ def test_info_exposes_resolved_raw_dim_profile_and_hash() -> None:
     profile = _profile()
     info = _service(profile=profile).get_info()
 
-    assert info["protocol_version"] == "cosmos-libero-eval-v2"
+    assert info["protocol_version"] == "cosmos-libero-eval-v3"
     assert info["sampling_seed_contract"] == server.SAMPLING_SEED_CONTRACT
+    assert info["gripper_adapter_contract"] == GRIPPER_ADAPTER_CONTRACT
     assert info["raw_action_dim"] == profile.effective_action_dim
     assert info["policy_profile"] == profile.model_dump(mode="json")
     assert info["policy_profile"]["profile_hash"] == profile.profile_hash

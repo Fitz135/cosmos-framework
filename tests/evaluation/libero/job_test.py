@@ -230,6 +230,7 @@ def _info(profile: LiberoCheckpointProfile) -> dict[str, Any]:
     return {
         "protocol_version": libero_runner.PROTOCOL_VERSION,
         "sampling_seed_contract": libero_runner.SAMPLING_SEED_CONTRACT,
+        "gripper_adapter_contract": libero_runner.GRIPPER_ADAPTER_CONTRACT,
         "policy_profile": profile.model_dump(mode="json"),
     }
 

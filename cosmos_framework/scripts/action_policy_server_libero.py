@@ -77,7 +77,7 @@ from cosmos_framework.data.generator.action.transforms import (
     reflection_pad_to_target,
     remove_reflection_padding,
 )
-from cosmos_framework.evaluation.libero.action import validate_action_chunk
+from cosmos_framework.evaluation.libero.action import GRIPPER_ADAPTER_CONTRACT, validate_action_chunk
 from cosmos_framework.evaluation.libero.checkpoint_profile import resolve_checkpoint_profile
 from cosmos_framework.evaluation.libero.prompt import build_libero_json_prompt
 from cosmos_framework.evaluation.libero.schema import (
@@ -108,7 +108,7 @@ ResolvedActionNormalization = Literal["meanstd", "minmax", "quantile", "quantile
 _DURATION_FPS_TEMPLATE = "The video is {duration:.1f} seconds long and is of {fps:.0f} FPS."
 _RESOLUTION_TEMPLATE = "This video is of {height}x{width} resolution."
 
-_PROTOCOL_VERSION = "cosmos-libero-eval-v2"
+_PROTOCOL_VERSION = "cosmos-libero-eval-v3"
 
 
 def _profile_identity_config_path(config_file: str | Path | None) -> str | None:
@@ -800,6 +800,7 @@ class ActionModelService:
         return {
             "protocol_version": _PROTOCOL_VERSION,
             "sampling_seed_contract": SAMPLING_SEED_CONTRACT,
+            "gripper_adapter_contract": GRIPPER_ADAPTER_CONTRACT,
             "run_name": self.cfg.experiment_name,
             "checkpoint": self.cfg.checkpoint_dir,
             "config_file": str(self.setup_args.config_file),
@@ -1229,7 +1230,7 @@ class _ActionHandler(BaseHTTPRequestHandler):
                 410,
                 {
                     "error": (
-                        "Legacy single-item policy endpoint is disabled for cosmos-libero-eval-v2; "
+                        "Legacy single-item policy endpoint is disabled for cosmos-libero-eval-v3; "
                         "send {'items': [...]} to /predict_batch (including N=1)."
                     )
                 },

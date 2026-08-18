@@ -28,6 +28,36 @@ Use this template:
 - **Validation**: ...
 ```
 
+## DEV-0020 — 2026-08-19 04:53 +08:00 — Version LIBERO gripper adaptation
+
+- **Area**: LIBERO gripper semantics, strict policy/server handshake,
+  episode-level action-adapter provenance, and scheduled H200 smoke execution.
+- **Summary**: Made the finite `pm_one` actuator mapping an explicit immutable
+  contract instead of treating every model-space excursion beyond `[-1, 1]` as
+  an infrastructure failure. The adapter preserves the legacy pass-through
+  semantics inside the range, clamps only the gripper channel at the LIBERO
+  environment boundary, leaves all other action validation strict, and records
+  complete-generated-chunk clipping telemetry per episode. Bumped the strict
+  protocol to `cosmos-libero-eval-v3`, the run manifest to schema 3, and metrics
+  to schema 2 with count-weighted clipping aggregation rather than an average
+  of episode rates.
+- **Documentation**: Defined the explicit
+  `pm-one-finite-clamp-v1` contract, explained why the committed
+  quantile statistics make gripper denormalization an identity transform,
+  recorded the three non-promotable `v7` adapter failures, and reserved fresh
+  `v8` job/run identities for post-fix validation.
+- **Validation**: The focused action/metrics/runner/server suite passed 102
+  tests, the full LIBERO suite passed 142 tests, and the final runner suite
+  passed 28 tests. Ruff lint and format checks passed; targeted Pyrefly reported
+  0 errors; and `git diff --check` passed. Full Pyrefly still reported 21
+  pre-existing or environment dependency errors involving packages such as
+  Apex, Lance, torchaudio, Flash Attention, NATTEN, Diffusers, and OpenPI, but
+  none was in the nine modified source/test files. All three `v7` H200 jobs
+  proved the v2 seed repair by completing one 8-step policy inference, then
+  failed before the first environment step at the pre-fix strict `pm_one` range
+  check. The `v8` H200 retry has not yet been submitted, so no smoke success is
+  claimed.
+
 ## DEV-0019 — 2026-08-19 04:26 +08:00 — Version LIBERO policy sampling seeds
 
 - **Area**: LIBERO deterministic policy sampling, server/runner protocol
