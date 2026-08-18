@@ -4,17 +4,18 @@
 
 - Branch: `feature_libero_finetune`
 - Base branch: `feature/cosmos3-edge-libero`
-- Current phase: DEV-0020 strict Cosmos3-Edge LIBERO gripper-adapter protocol.
+- Current phase: DEV-0021 sealed three-checkpoint LIBERO evaluation and
+  cross-suite reporting.
 - Original 5k training: `cosmos3-edge-libero-full-b128-2361150` succeeded.
 - 10k continuation output: complete `iter_000010000/model` DCP under the
   canonical output root.
 - Formal checkpoints: base Edge HF regular, 5k fine-tuned HF EMA, and 10k
   fine-tuned HF EMA.
 - Locked simulator preflight: passed for the four primary suites.
-- Policy rollout status: all three `v7` smokes completed one 8-step model
-  inference but failed at the pre-fix strict `pm_one` range check before the
-  first environment step; `v8` is pending, and no smoke, pilot, full, or
-  success-rate claim is recorded yet.
+- Policy rollout status: the three `v8` smokes and three-checkpoint pilot
+  passed their artifact/infra gates. The formal `full-v1-45ebff5` matrix is
+  complete: all 12 RJobs succeeded, all 12 suite runs are sealed, and all
+  6000 terminal episodes have zero unresolved infrastructure errors.
 - Previous real-sample action check: finite `[1, 8, 10]` output from the 5k
   export.
 
@@ -393,6 +394,7 @@ output/cosmos-framework-eval/
   runtime/libero-config/config.yaml
   libero/preflight/<run-id>/preflight.json
   libero/runs/<checkpoint-id>/<smoke|pilot|full>/<suite>/
+  libero/reports/<run-id>/summary.json
 ```
 
 Each immutable run directory holds `manifest.json`, `episodes.jsonl`,
@@ -402,13 +404,13 @@ stable episode ID. Historical infrastructure attempts remain auditable after a
 successful retry; success requires evaluated terminal episodes and
 `overall.infra_errors=0`.
 
-Promotion remains pending:
+All promotion stages are complete:
 
-| Stage | Planned scope | Gate |
-| ----- | ------------- | ---- |
-| Smoke | each checkpoint, `libero_spatial` task 0, 1 trial, 1 env, 20 steps | Matching profile/fingerprint, finite `[8,10]` actions, terminal record, no infrastructure error. |
-| Pilot | each checkpoint, tasks 0 and 1 of one suite, 3 trials, 2 envs, canonical max steps | Stable resets/seeds, acceptable latency and memory, complete artifacts. |
-| Full | three HF checkpoints × four primary suites × 10 tasks × 50 trials, initially 8 envs | One sealed run per checkpoint/suite; aggregate only identical contracts. |
+| Stage | Executed scope | Result |
+| ----- | -------------- | ------ |
+| Smoke | each checkpoint, `libero_spatial` task 0, 1 trial, 1 env, 20 steps | Three `smoke-v8-45ebff5` runs sealed with matching identity, finite `[8,10]` actions, schema-2 metrics, `_SUCCESS`, and zero infra errors. The deliberately short horizon produced no task success and was not used as a policy-quality estimate. |
+| Pilot | each checkpoint, `libero_spatial` tasks 0 and 1, 3 trials, 2 envs, canonical max steps | Three `pilot-v1-45ebff5` runs sealed: Base 0/6, 5k EMA 5/6, and 10k EMA 6/6, all with zero infra errors. |
+| Full | three HF checkpoints × four primary suites × 10 tasks × 50 trials, 8 envs | All 12 `full-v1-45ebff5` RJobs succeeded and sealed 500 episodes each: 6000/6000 terminal episodes, zero infra errors. |
 
 Base metrics will be labeled zero-shot and never mixed with fine-tuned
 results. The 5k and 10k EMA results remain separate checkpoint fingerprints.
@@ -481,10 +483,8 @@ libero/runs/edge-10k-hf-ema/smoke-v6-241aa98/libero_spatial/
 DEV-0019 retains the collision-resistant signed-63-bit logical identity and
 adds the versioned, lossless MT19937 key adaptation described in the runtime
 contract. Because the protocol and manifest identity changed from v1 to v2,
-the `v6` directories must never be resumed. The `v7` Base, 5k, and 10k jobs
-must use new job and run IDs. They are pending submission; promotion still
-requires a terminal episode, finite `[8,10]` actions, zero unresolved
-infrastructure errors, `metrics.json`, and `_SUCCESS` for each checkpoint.
+the `v6` directories must never be resumed. The later `v7` Base, 5k, and 10k
+jobs therefore used new job and run IDs; their outcome is recorded below.
 
 The `v7` retry from commit `b0a6cf3` proved that seed adaptation is effective.
 Jobs `c3-libero-base-smoke-0819-v7`, `c3-libero-5k-smoke-0819-v7`, and
@@ -513,10 +513,121 @@ For the gripper dimension, the selected `global_raw` q01/q99 values are exactly
 defines `pm_one` as a finite pass-through with `[-1, 1]` clamping. DEV-0020
 makes that behavior explicit, versioned, and auditable instead of silently
 loosening the strict adapter. Protocol v3/schema 3 requires fresh `v8` job and
-run IDs. Those jobs are pending submission; promotion still requires terminal
-episodes, finite adapted actions, recorded clipping telemetry, zero unresolved
-infrastructure errors, a schema-2 `metrics.json` with count-weighted clipping
-telemetry, and `_SUCCESS` for every checkpoint.
+run IDs. The resulting `v8` smoke, pilot, and full formal matrix are complete
+and recorded below.
+
+### Completed v8 smoke and pilot
+
+Commit `45ebff509696730429d028e7b8cdc2a7bcf75584` was clean in every
+schema-3 manifest. The three `smoke-v8-45ebff5` RJobs all succeeded, each run
+sealed one 20-step terminal episode with schema-2 metrics, `_SUCCESS`, and no
+infrastructure error. Each policy completed three real 8-step predictions.
+The task outcome was false because the deliberately short smoke horizon is a
+startup gate, not a policy-quality measurement.
+
+| Checkpoint | Smoke RJob | Gripper clipped/generated | Raw range | Max overshoot |
+| ---------- | ---------- | ------------------------- | --------- | ------------- |
+| Base Edge regular, zero-shot | `c3-libero-base-smoke-0819-v8` | 7/24 (29.1667%) | `[-1.706365, 1.351510]` | 0.706365 |
+| 5k Edge EMA | `c3-libero-5k-smoke-0819-v8` | 6/24 (25.0000%) | `[-1.005497, -0.985256]` | 0.005497 |
+| 10k Edge EMA | `c3-libero-10k-smoke-0819-v8` | 21/24 (87.5000%) | `[-1.063464, -0.971878]` | 0.063464 |
+
+The `pilot-v1-45ebff5` promotion then evaluated `libero_spatial` tasks 0 and
+1 with three trials per task, two parallel environments, canonical 220-step
+limits, eight-step chunks, and zero infrastructure errors:
+
+| Checkpoint | Pilot success | Wilson 95% CI | Gripper clipped/generated | Raw range | Max overshoot |
+| ---------- | ------------- | ------------- | ------------------------- | --------- | ------------- |
+| Base Edge regular, zero-shot | 0/6 (0.0000%) | [0.0000%, 39.0334%] | 410/1344 (30.5060%) | `[-3.163910, 3.252380]` | 2.252380 |
+| 5k Edge EMA | 5/6 (83.3333%) | [43.6497%, 96.9947%] | 378/744 (50.8065%) | `[-1.042301, 1.030949]` | 0.042301 |
+| 10k Edge EMA | 6/6 (100.0000%) | [60.9666%, 100.0000%] | 458/576 (79.5139%) | `[-1.092764, 1.081303]` | 0.092764 |
+
+### Formal full-v1 results
+
+The formal matrix used run ID `full-v1-45ebff5`, all 10 tasks in each of
+`libero_spatial`, `libero_object`, `libero_goal`, and `libero_10`, 50 trials
+per task, eight parallel environments, seed 0, action horizon 8, 10 warmup
+steps, canonical suite limits, eight UniPC steps, guidance 1.0, and a
+120-second request timeout. Twelve independent one-replica/one-H200 RJobs each
+wrote one checkpoint/suite directory. All 12 scheduler jobs report
+`Succeeded`; every directory contains exactly 500 terminal episode records,
+schema-2 `metrics.json`, and `_SUCCESS`. There are 6000 terminal episodes and
+zero infrastructure attempts or unresolved infrastructure errors.
+
+Counts below are exact values from the sealed suite artifacts; percentages and
+intervals are rounded for display. The checkpoint aggregate is micro
+episode-weighted across four equally sized suites; checkpoints remain
+independent identities.
+
+| Checkpoint | `libero_spatial` | `libero_object` | `libero_goal` | `libero_10` | Overall (Wilson 95% CI) |
+| ---------- | ---------------- | --------------- | ------------- | ----------- | ----------------------- |
+| Base Edge regular, zero-shot | 0/500 (0.0000%) | 0/500 (0.0000%) | 0/500 (0.0000%) | 0/500 (0.0000%) | 0/2000 (0.0000%), [0.0000%, 0.1917%] |
+| 5k Edge EMA | 388/500 (77.6000%) | 476/500 (95.2000%) | 397/500 (79.4000%) | 410/500 (82.0000%) | 1671/2000 (83.5500%), [81.8612%, 85.1102%] |
+| 10k Edge EMA | 384/500 (76.8000%) | 479/500 (95.8000%) | 371/500 (74.2000%) | 425/500 (85.0000%) | 1659/2000 (82.9500%), [81.2390%, 84.5346%] |
+
+The following clipping rates are count-weighted over complete generated
+chunks, including unexecuted tails, and exclude infrastructure attempts:
+
+| Checkpoint | `libero_spatial` | `libero_object` | `libero_goal` | `libero_10` | Overall |
+| ---------- | ---------------- | --------------- | ------------- | ----------- | ------- |
+| Base Edge regular, zero-shot | 35259/112000 (31.4813%) | 44792/140000 (31.9943%) | 48239/152000 (31.7362%) | 82915/260000 (31.8904%) | 211205/664000 (31.8080%) |
+| 5k Edge EMA | 28381/60264 (47.0945%) | 24511/54664 (44.8394%) | 29367/65496 (44.8379%) | 55495/121168 (45.8000%) | 137754/301592 (45.6756%) |
+| 10k Edge EMA | 48530/61704 (78.6497%) | 43294/53440 (81.0142%) | 54489/69960 (77.8859%) | 92822/113272 (81.9461%) | 239135/298376 (80.1455%) |
+
+Across all four suites, the Base pre-clamp range was
+`[-4.657578, 4.700876]` with maximum overshoot 3.700876; the 5k range was
+`[-1.079304, 1.071179]` with overshoot 0.079304; and the 10k range was
+`[-1.133901, 1.115089]` with overshoot 0.133901. Clipping telemetry is an
+adapter-boundary audit metric, not task success and not a reason to merge the
+two fine-tuned checkpoint identities.
+
+Formal provenance is uniform except for the declared checkpoint identity and
+per-job scheduler ID: protocol `cosmos-libero-eval-v3`, manifest schema 3,
+metrics schema 2, clean Git commit `45ebff509696730429d028e7b8cdc2a7bcf75584`,
+image
+`registry.h.pjlab.org.cn/ailab-llmrazor/xtuner_tmp:pt28_20260303_f2adb47`,
+H200 GPU, Torch `2.13.0+cu130`, LIBERO 0.1.1, robosuite 1.4.0, MuJoCo 3.3.2,
+and uv-lock SHA-256
+`f5ec25154f3dc63f49680c91c0dee807b02ea6b846833d6f204bc5659f67e555`.
+The RJob names are
+`c3-libero-{base,5k,10k}-{spatial,object,goal,10}-full-0819-v1`; each exact
+name is also immutable in its suite manifest.
+
+Rollout-efficiency totals are descriptive outcomes under the same canonical
+suite limits, not normalized scores:
+
+| Checkpoint | Steps total / mean | Decisions total / mean |
+| ---------- | ------------------ | ---------------------- |
+| Base Edge regular, zero-shot | 660000 / 330.0000 | 83000 / 41.5000 |
+| 5k Edge EMA | 295284 / 147.6420 | 37699 / 18.8495 |
+| 10k Edge EMA | 292048 / 146.0240 | 37297 / 18.6485 |
+
+The sealed report was reproduced and atomically published with the committed
+CLI:
+
+```bash
+.venv/bin/python -m cosmos_framework.evaluation.libero.aggregate \
+  --runs-root /mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/output/cosmos-framework-eval/libero/runs \
+  --run-id full-v1-45ebff5 \
+  --checkpoint-id base-edge-action-hf-regular \
+  --checkpoint-id edge-5k-hf-ema \
+  --checkpoint-id edge-10k-hf-ema \
+  --suites libero_spatial,libero_object,libero_goal,libero_10 \
+  --task-ids 0,1,2,3,4,5,6,7,8,9 \
+  --trials-per-task 50 \
+  --require-canonical-max-steps \
+  --require-zero-infra-attempts \
+  --output /mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/output/cosmos-framework-eval/libero/reports/full-v1-45ebff5/summary.json
+```
+
+The 139089-byte output has report schema 1, kind
+`libero-checkpoint-matrix`, protocol `cosmos-libero-eval-v3`, 12 sealed
+sources, 6000 terminal episodes, and SHA-256
+`0e5a5fa4090cae396a227516175bd1e5ef36675035f4593a8b5298fbddad76d2`.
+It retains separate checkpoint objects, their exact identity/profile and
+per-source artifact hashes, task/suite/overall Wilson metrics, steps and
+decisions, and terminal-only count-weighted gripper telemetry. Re-running the
+same CLI accepted the byte-identical report; a conflicting output is never
+overwritten.
 
 ### PJLab launch skeletons
 
@@ -567,10 +678,11 @@ rjob logs replica <REPLICA_NAME> -n 200
 rjob logs job <JOB_NAME> -n 200
 ```
 
-The 16-CPU/128-GiB request is a pilot starting point for eight environments,
-not a measured minimum. The final image reference, scheduler ID, mount,
-package versions, resolved profile, checkpoint fingerprint, and sampling
-settings are persisted as provenance.
+The 16-CPU/128-GiB request supported all formal eight-environment jobs without
+OOM or infrastructure failure; it is a validated configuration, not a measured
+minimum. The final image reference, scheduler ID, mount, package versions,
+resolved profile, checkpoint fingerprint, and sampling settings are persisted
+as provenance.
 
 ## Implementation log
 
@@ -945,8 +1057,9 @@ settings are persisted as provenance.
   Edge HF regular versus the 5k and 10k fine-tuned HF EMA exports; DCP is
   retained only as a regular-weight source/debug path.
 - Confirmed the locked LIBERO 0.1.1 / robosuite 1.4.0 / MuJoCo 3.3.2
-  environment and a four-primary-suite EGL preflight. Real policy smoke,
-  pilot, and full rollouts remain pending, so no success metric is claimed.
+  environment and a four-primary-suite EGL preflight. At the DEV-0015 commit
+  boundary real policy rollouts had not started; the later smoke, pilot, and
+  full results are recorded in the formal-results section above.
 - Updated the public guide and this operations record with the checkpoint
   matrix, 10k export, environment/assets, canonical output and resume rules,
   promotion gates, and PJLab launch/mount skeletons.

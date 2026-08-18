@@ -485,7 +485,71 @@ sampling request, or rollout plan requires a new run directory. Successfully
 retried historical infrastructure attempts remain auditable, while terminal
 `overall.infra_errors` must be zero.
 
-### 3.4 Scheduled execution
+### 3.4 Aggregate and report sealed runs
+
+Do not combine suite-level percentages by hand. The sealed-run aggregator
+re-opens every manifest, episode journal, metrics file, and completion marker;
+validates the versioned protocol, policy identity, rollout selection,
+provenance, expected episode grid, and optional absence of historical infra
+attempts; re-derives all task, suite, checkpoint, efficiency, and gripper
+metrics; rejects any published value that disagrees; and fingerprints every
+source artifact in the report. It keeps checkpoint results independent and
+uses micro episode-weighting only inside each checkpoint.
+
+For the standard `<runs-root>/<checkpoint-id>/<run-id>/<suite>` layout, run:
+
+```bash
+RUN_ID=full-v1-example
+RUNS_ROOT="$CANONICAL_OUTPUT_ROOT/cosmos-framework-eval/libero/runs"
+REPORT="$CANONICAL_OUTPUT_ROOT/cosmos-framework-eval/libero/reports/$RUN_ID/summary.json"
+
+"$SERVER_PYTHON" -m cosmos_framework.evaluation.libero.aggregate \
+  --runs-root "$RUNS_ROOT" \
+  --run-id "$RUN_ID" \
+  --checkpoint-id base-edge-action-hf-regular \
+  --checkpoint-id edge-5k-hf-ema \
+  --checkpoint-id edge-10k-hf-ema \
+  --require-zero-infra-attempts \
+  --output "$REPORT"
+```
+
+The defaults require the four primary suites in canonical order, task IDs
+0–9, 50 trials per task, and each suite's canonical step limit. Use repeated
+`--checkpoint-run CHECKPOINT_ID=/absolute/run/root` arguments instead when the
+input roots do not share that layout. The output must be an absolute path
+outside every input run tree. Publication is atomic and deterministic: an
+identical rerun is accepted, while a different report at the same path is not
+overwritten.
+
+Report schema 1 records the strict common contract, input selection, source
+run count, total episodes, and one independent object per checkpoint. Each
+checkpoint object retains its fingerprint, profile hash, role, zero-shot flag,
+weights variant, source directories/job IDs/completion times/source hashes,
+task/suite/overall success with Wilson intervals, rollout-step and decision
+summaries, and count-weighted gripper telemetry.
+
+The DEV-0021 reference matrix used run ID `full-v1-45ebff5` and produced 12
+sealed suite runs with 6000 terminal episodes and no infrastructure attempts.
+The report is under
+`cosmos-framework-eval/libero/reports/full-v1-45ebff5/summary.json` relative to
+the canonical output root. It is 139089 bytes with SHA-256
+`0e5a5fa4090cae396a227516175bd1e5ef36675035f4593a8b5298fbddad76d2`;
+an identical CLI rerun was idempotent. Counts are exact; percentages and
+intervals below are rounded for display:
+
+| Checkpoint | `libero_spatial` | `libero_object` | `libero_goal` | `libero_10` | Overall (Wilson 95% CI) |
+| ---------- | ---------------- | --------------- | ------------- | ----------- | ----------------------- |
+| Base Edge regular, zero-shot | 0/500 (0.00%) | 0/500 (0.00%) | 0/500 (0.00%) | 0/500 (0.00%) | 0/2000 (0.00%), [0.00%, 0.19%] |
+| 5k Edge EMA | 388/500 (77.60%) | 476/500 (95.20%) | 397/500 (79.40%) | 410/500 (82.00%) | 1671/2000 (83.55%), [81.86%, 85.11%] |
+| 10k Edge EMA | 384/500 (76.80%) | 479/500 (95.80%) | 371/500 (74.20%) | 425/500 (85.00%) | 1659/2000 (82.95%), [81.24%, 84.53%] |
+
+Across all four suites, the Base, 5k, and 10k count-weighted gripper clipping
+rates were respectively 211205/664000 (31.8080%), 137754/301592 (45.6756%),
+and 239135/298376 (80.1455%). This is boundary-adapter telemetry, not task
+success. The Base number remains a zero-shot diagnostic and is never presented
+as a fine-tuned result.
+
+### 3.5 Scheduled execution
 
 The server and runner communicate over loopback, so use one replica and one GPU
 per job. Pin the exact image and workspace mount and record both in provenance.
@@ -530,7 +594,7 @@ job plus its concrete replica with `rjob get <JOB_NAME>`,
 `rjob logs job <JOB_NAME> -n 200`. Do not launch multiple replicas against one
 run directory. Size CPU and memory from the pilot when increasing `--num-envs`.
 
-### 3.5 Nano legacy client
+### 3.6 Nano legacy client
 
 `cosmos_framework/simulation/libero/closed_loop_eval.py` remains a Nano
 legacy path for previously trained Nano checkpoints. Its 20 FPS assumptions,

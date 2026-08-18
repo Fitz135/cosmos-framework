@@ -28,6 +28,32 @@ Use this template:
 - **Validation**: ...
 ```
 
+## DEV-0021 — 2026-08-19 07:32 +08:00 — Seal and report the LIBERO checkpoint matrix
+
+- **Area**: Strict LIBERO sealed-run aggregation, formal three-checkpoint
+  evaluation reporting, and H200 RJob provenance.
+- **Summary**: Added a fail-closed matrix aggregator that reloads and validates
+  every immutable manifest, episode journal, metrics file, and completion
+  marker; re-derives suite/task/checkpoint metrics and count-weighted gripper
+  telemetry; refuses incompatible policy or rollout contracts; preserves each
+  checkpoint identity; and atomically publishes a deterministic report. The
+  formal Base regular, 5k EMA, and 10k EMA evaluation is complete across all
+  four primary suites: 12 sealed suite runs, 6000 terminal episodes, and zero
+  infrastructure errors.
+- **Documentation**: Replaced the pending promotion state with the completed
+  v8 smoke, pilot, and full results; recorded exact suite/checkpoint success
+  rates, Wilson intervals, gripper telemetry, checkpoint identities, the
+  successful single-replica RJob contract, and the reproducible sealed-report
+  command and artifact path.
+- **Validation**: All 154 LIBERO tests and the 42 focused aggregation/profile
+  tests passed; Ruff passed and targeted Pyrefly reported 0 errors. The formal
+  CLI validated all 12 immutable suite artifacts and atomically published a
+  139089-byte report for 6000 episodes with zero infra attempts; separate
+  scheduler inspection confirmed all 12 RJobs succeeded. An identical rerun
+  proved idempotency, and the report SHA-256 is
+  `0e5a5fa4090cae396a227516175bd1e5ef36675035f4593a8b5298fbddad76d2`.
+  `git diff --check` passed.
+
 ## DEV-0020 — 2026-08-19 04:53 +08:00 — Version LIBERO gripper adaptation
 
 - **Area**: LIBERO gripper semantics, strict policy/server handshake,
@@ -55,8 +81,8 @@ Use this template:
   none was in the nine modified source/test files. All three `v7` H200 jobs
   proved the v2 seed repair by completing one 8-step policy inference, then
   failed before the first environment step at the pre-fix strict `pm_one` range
-  check. The `v8` H200 retry has not yet been submitted, so no smoke success is
-  claimed.
+  check. At the DEV-0020 commit boundary the `v8` H200 retry had not yet been
+  submitted; its successful promotion evidence is recorded in DEV-0021.
 
 ## DEV-0019 — 2026-08-19 04:26 +08:00 — Version LIBERO policy sampling seeds
 
@@ -81,8 +107,9 @@ Use this template:
   remaining v1 protocol reference. The three `v6` H200 jobs passed the locked
   four-suite EGL preflight, loaded their intended models, and matched their
   strict profile/fingerprint handshakes before consistently exposing the
-  pre-fix NumPy seed-range failure. The `v7` H200 retry has not yet been
-  submitted, so no smoke success is claimed.
+  pre-fix NumPy seed-range failure. At the DEV-0019 commit boundary the `v7`
+  H200 retry had not yet been submitted; its diagnostic outcome and the later
+  successful `v8` promotion are recorded in DEV-0020 and DEV-0021.
 
 ## DEV-0018 — 2026-08-19 03:55 +08:00 — Make LIBERO runtime artifacts portable
 

@@ -319,7 +319,8 @@ def _checkpoint_fingerprint(
     return _hash_checkpoint_files(labeled)
 
 
-def _profile_hash(values: Mapping[str, Any]) -> str:
+def compute_profile_hash(values: Mapping[str, Any]) -> str:
+    """Return the canonical hash of policy-semantic profile fields."""
     excluded = {
         "checkpoint_path",
         "checkpoint_format",
@@ -450,7 +451,7 @@ def resolve_checkpoint_profile(
         "profile_hash": "0" * 64,
         "profile_sources": tuple(source_names),
     }
-    values["profile_hash"] = _profile_hash(values)
+    values["profile_hash"] = compute_profile_hash(values)
     if expected_profile_hash is not None and expected_profile_hash != values["profile_hash"]:
         raise CheckpointProfileError(
             f"Explicit profile hash mismatch: expected {expected_profile_hash}, resolved {values['profile_hash']}"
