@@ -28,6 +28,27 @@ Use this template:
 - **Validation**: ...
 ```
 
+## DEV-0023 — 2026-08-19 17:14 +08:00 — Warm-start LIBERO from WAM 90k
+
+- **Area**: Cosmos3-Edge LIBERO model-only warm start and PJLab training
+  operations.
+- **Summary**: Prepared and submitted a 10,000-step FSDP8 LIBERO fine-tune
+  initialized from the requested WAM iteration-90000 DCP. The run creates fresh
+  optimizer, scheduler, trainer, RNG, and EMA state; retains batch/accumulation
+  `128/2`, global batch 2048, LR `5e-5`, forced Flash Attention 3, and
+  checkpoint/rollout cadence 2000. A queued no-worker smoke was stopped before
+  compute started so the first available 8×H200 node goes directly to the
+  formal run.
+- **Documentation**: Recorded the exact source and output paths, DCP
+  compatibility evidence, immutable launchers and hashes, resource contract,
+  job identities, and initial scheduler state in
+  `dev/cosmos3_edge_libero_finetune.md`.
+- **Validation**: Compared DCP metadata against the canonical Edge base: all
+  549 regular-model tensor keys and shapes matched with zero missing, extra, or
+  mismatched entries. The structured config dry-run passed with model-only
+  loading; both launchers passed `bash -n`; their diff and critical overrides
+  were audited; and `git diff --check` passed.
+
 ## DEV-0022 — 2026-08-19 15:45 +08:00 — Add Edge LIBERO evaluation runbook
 
 - **Area**: Cosmos3-Edge LIBERO operator documentation.

@@ -1067,3 +1067,52 @@ as provenance.
   passed, and Pyrefly reported 0 errors. The strict resolver successfully
   resolved all three real checkpoint profiles and fingerprints, and the locked
   EGL preflight passed all four primary LIBERO suites.
+
+### DEV-0023
+
+- The requested model-only warm start is
+  `/mnt/shared-storage-user/evoagi-share/VTLA/chenyitong/outputs/cosmos3-edge/cosmos3_action/wam_action_mixed_dense_epoch/mixed-edge-dense-epoch64-noac-resume10000-20260726-125729/checkpoints/iter_000090000`.
+  Its model DCP has 1,098 metadata entries: 549 regular `net.*` tensors and
+  549 `net_ema.*` tensors. Comparing the regular tensors with
+  `/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/model/Cosmos3-Edge-dcp`
+  found 549 shared keys, zero keys unique to either side, and zero shape
+  mismatches. The 64-way source layout has eight 2,528,971,546-byte data
+  shards and 56 zero-byte replica placeholders, consistent with FSDP8 across
+  eight replicated groups.
+- The LIBERO run deliberately uses the regular source weights:
+  `checkpoint.load_path` is the requested iteration-90000 directory,
+  `checkpoint.load_training_state=false`,
+  `checkpoint.keys_to_skip_loading=["net_ema."]`, and
+  `checkpoint.load_ema_to_reg=false`. Training therefore starts at iteration
+  0 with fresh optimizer, scheduler, trainer, RNG, and EMA state; it does not
+  resume the WAM step 90000 or its training state.
+- The established Edge recipe remains otherwise unchanged: one 8-rank FSDP
+  node, 128 samples/rank, gradient accumulation 2, global batch 2048, LR
+  `5e-5`, warmup 500, 10,000 iterations, W&B offline, 10 FPS merged
+  two-camera LIBERO data, and forced Flash Attention 3. DCP checkpoints and EMA
+  rollout visualizations are expected every 2000 steps at 2000, 4000, 6000,
+  8000, and 10000.
+- The formal output root is
+  `/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/output/cosmos-framework-training/cosmos3-edge-libero-wam90k-10k`.
+  The immutable launcher uses code commit
+  `9048081deb43e179bc6e782d64d9496479efecd7` and is stored at
+  `/mnt/shared-storage-user/evoagi-share/VTLA/lutianyi/output/cosmos-framework-training/jobs/cosmos3-edge-libero-wam90k-10k/launch.sh`
+  with SHA-256
+  `c48c67f6163f36ef1352e0887c671804a1dc63735526ceb58eadc74d75709e66`.
+  It reconstructs the validated node-local Torch 2.10/CUDA 12.8 runtime,
+  requires a finite Flash Attention 3 forward/backward preflight, and writes a
+  durable combined log to `logs/full.log` under the formal output root.
+- A structured TOML dry-run passed with the requested source, model-only load,
+  FSDP8, batch/accumulation `128/2`, and local Edge processor; its emitted
+  config is retained under the smoke output root's `dryrun/config-run`.
+  The one-step job `cosmos3-edge-libero-wam90k-smoke` was submitted at
+  17:00 +08:00, remained queued without a worker or log, and was intentionally
+  stopped at 17:12 before CUDA or training ran. Its launcher SHA-256 is
+  `3da8be5d757cfa6e3ed0d2b487ba5137e54931b7e932d178d79b62e904441c91`.
+- The formal job `cosmos3-edge-libero-wam90k-10k` was submitted at 17:13
+  +08:00 with one private non-preemptible replica, 8 H200s, 96 CPUs,
+  1,800,000 MiB host memory, host networking/shared memory, gang start, RDMA,
+  `brainpp.cn/fuse=1`, the `evoagi_gpu` group/quota, and the explicit GPFS1
+  VTLA mount. At submission its replica
+  `cosmos3-edge-libero-wam90k-10k-cfcd2` was `STARTING` in the scheduler
+  queue; no worker-side preflight or training evidence existed yet.
