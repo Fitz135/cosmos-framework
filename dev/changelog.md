@@ -28,6 +28,20 @@ Use this template:
 - **Validation**: ...
 ```
 
+## DEV-0022 — 2026-08-19 15:45 +08:00 — Add Edge LIBERO evaluation runbook
+
+- **Area**: Cosmos3-Edge LIBERO operator documentation.
+- **Summary**: Added a concise Chinese runbook covering the strict evaluation
+  entry points, environment preflight, four primary suites and canonical
+  limits, local and validated RJob launch patterns, artifact inspection, and
+  the completed three-checkpoint results.
+- **Documentation**: Added `dev/edge_libero_eval.md` as the practical operator
+  guide for launching, monitoring, and reading Edge LIBERO evaluations.
+- **Validation**: Extracted every Bash code block and passed `bash -n`; checked
+  all referenced code, adapter, checkpoint, and report paths; matched the
+  formal report SHA-256; scanned for credentials and sensitive token names;
+  and passed `git diff --check`.
+
 ## DEV-0021 — 2026-08-19 07:32 +08:00 — Seal and report the LIBERO checkpoint matrix
 
 - **Area**: Strict LIBERO sealed-run aggregation, formal three-checkpoint
